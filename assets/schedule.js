@@ -9,12 +9,115 @@ import {
 import { POSITIONS } from "./positions.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const PX_PER_HOUR = 56;
+
+function timeToMinutes(t) {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function minutesToTimeStr(mins) {
+  const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 
 function formatTime(t) {
   const [h, m] = t.split(":").map(Number);
   const period = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+// Assigns overlapping same-day entries to side-by-side "lanes" so they don't
+// visually collide — same approach most calendar UIs use for double-booked slots.
+function assignLanes(events) {
+  const sorted = events.slice().sort((a, b) => a.startMin - b.startMin);
+  const laneEnds = [];
+  const placed = [];
+  for (const ev of sorted) {
+    let laneIdx = laneEnds.findIndex((end) => end <= ev.startMin);
+    if (laneIdx === -1) {
+      laneIdx = laneEnds.length;
+      laneEnds.push(ev.endMin);
+    } else {
+      laneEnds[laneIdx] = ev.endMin;
+    }
+    placed.push({ ...ev, lane: laneIdx });
+  }
+  const laneCount = laneEnds.length || 1;
+  return placed.map((p) => ({ ...p, laneCount }));
+}
+
+function renderCalendar(container, entries, teamNames) {
+  if (entries.length === 0) {
+    container.innerHTML = `<p style="color:var(--muted);">No schedule entries yet — add one above.</p>`;
+    return;
+  }
+
+  let rangeStart = Math.min(...entries.map((e) => timeToMinutes(e.startTime)));
+  let rangeEnd = Math.max(...entries.map((e) => timeToMinutes(e.endTime)));
+  rangeStart = Math.max(0, Math.floor(rangeStart / 60) * 60 - 60);
+  rangeEnd = Math.min(24 * 60, Math.ceil(rangeEnd / 60) * 60 + 60);
+  const totalHeight = ((rangeEnd - rangeStart) / 60) * PX_PER_HOUR;
+
+  const dayEvents = Array.from({ length: 7 }, () => []);
+  for (const e of entries) {
+    for (const d of e.days) {
+      dayEvents[d].push({
+        ...e,
+        startMin: timeToMinutes(e.startTime),
+        endMin: timeToMinutes(e.endTime),
+      });
+    }
+  }
+
+  let hourLabelsHtml = "";
+  for (let m = rangeStart; m < rangeEnd; m += 60) {
+    hourLabelsHtml += `<div class="calendar-time-label" style="height:${PX_PER_HOUR}px;">${formatTime(minutesToTimeStr(m))}</div>`;
+  }
+
+  const dayColsHtml = dayEvents
+    .map((evs) => {
+      const placed = assignLanes(evs);
+      const blocksHtml = placed
+        .map((ev) => {
+          const top = ((ev.startMin - rangeStart) / 60) * PX_PER_HOUR;
+          const height = Math.max(16, ((ev.endMin - ev.startMin) / 60) * PX_PER_HOUR);
+          const widthPct = 100 / ev.laneCount;
+          const leftPct = ev.lane * widthPct;
+          const matchLabel = ev.type === "team" ? teamNames.get(ev.teamId) || ev.teamId : ev.position;
+          return `<div class="calendar-event ${ev.type}" data-id="${ev.id}"
+            style="top:${top}px; height:${height}px; left:${leftPct}%; width:calc(${widthPct}% - 3px);"
+            title="${ev.label} (${matchLabel}) ${formatTime(ev.startTime)}–${formatTime(ev.endTime)} — click to delete">${ev.label}</div>`;
+        })
+        .join("");
+      const gridLines = `repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent ${PX_PER_HOUR}px)`;
+      return `<div class="calendar-day-col" style="height:${totalHeight}px; background-image:${gridLines};">${blocksHtml}</div>`;
+    })
+    .join("");
+
+  container.innerHTML = `
+    <div class="calendar-grid">
+      <div class="calendar-header-cell"></div>
+      ${DAY_NAMES.map((d) => `<div class="calendar-header-cell">${d}</div>`).join("")}
+      <div>${hourLabelsHtml}</div>
+      ${dayColsHtml}
+    </div>
+    <p style="color:var(--muted); font-size:0.8rem; margin-top:0.5rem;">
+      Teal = Team Practice, Coral = Positional Practice. Click an event to delete it.
+    </p>
+  `;
+
+  container.querySelectorAll(".calendar-event").forEach((el) => {
+    el.addEventListener("click", async () => {
+      if (!confirm("Delete this schedule entry?")) return;
+      await deleteDoc(doc(db, "schedule", el.dataset.id));
+      // Whoever owns the container is responsible for re-rendering — dispatch
+      // a custom event so initScheduleTab's refreshAll can pick it up.
+      container.dispatchEvent(new CustomEvent("schedule-changed", { bubbles: true }));
+    });
+  });
 }
 
 export function initScheduleTab(container) {
@@ -66,11 +169,22 @@ export function initScheduleTab(container) {
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0;">Master schedule</h2>
-      <table>
-        <thead><tr><th>Days</th><th>Time</th><th>Type</th><th>Matches</th><th>Label</th><th></th></tr></thead>
-        <tbody id="scheduleTableBody"></tbody>
-      </table>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <h2 style="margin:0;">Master schedule</h2>
+        <div class="tabs" style="margin-bottom:0;">
+          <button id="viewListBtn" class="active">List</button>
+          <button id="viewCalendarBtn">Calendar</button>
+        </div>
+      </div>
+
+      <div id="scheduleListView" style="margin-top:1rem;">
+        <table>
+          <thead><tr><th>Days</th><th>Time</th><th>Type</th><th>Matches</th><th>Label</th><th></th></tr></thead>
+          <tbody id="scheduleTableBody"></tbody>
+        </table>
+      </div>
+
+      <div id="scheduleCalendarView" class="hidden" style="margin-top:1rem; overflow-x:auto;"></div>
     </div>
   `;
 
@@ -85,6 +199,10 @@ export function initScheduleTab(container) {
   const positionSelect = container.querySelector("#schedulePosition");
   const labelInput = container.querySelector("#scheduleLabel");
   const tbody = container.querySelector("#scheduleTableBody");
+  const listView = container.querySelector("#scheduleListView");
+  const calendarView = container.querySelector("#scheduleCalendarView");
+  const viewListBtn = container.querySelector("#viewListBtn");
+  const viewCalendarBtn = container.querySelector("#viewCalendarBtn");
 
   for (let d = 0; d < 7; d++) {
     const wrap = document.createElement("label");
@@ -99,7 +217,23 @@ export function initScheduleTab(container) {
     positionPickerWrap.classList.toggle("hidden", isTeam);
   });
 
+  viewListBtn.addEventListener("click", () => {
+    viewListBtn.classList.add("active");
+    viewCalendarBtn.classList.remove("active");
+    listView.classList.remove("hidden");
+    calendarView.classList.add("hidden");
+  });
+  viewCalendarBtn.addEventListener("click", () => {
+    viewCalendarBtn.classList.add("active");
+    viewListBtn.classList.remove("active");
+    calendarView.classList.remove("hidden");
+    listView.classList.add("hidden");
+  });
+
+  container.addEventListener("schedule-changed", refreshAll);
+
   let teamNames = new Map();
+  let latestEntries = [];
 
   async function loadTeams() {
     const snap = await getDocs(collection(db, "teams"));
@@ -110,11 +244,12 @@ export function initScheduleTab(container) {
       .join("");
   }
 
-  async function refreshTable() {
+  async function refreshAll() {
     const snap = await getDocs(collection(db, "schedule"));
     const entries = [];
     snap.forEach((d) => entries.push({ id: d.id, ...d.data() }));
     entries.sort((a, b) => (Math.min(...a.days) - Math.min(...b.days)) || a.startTime.localeCompare(b.startTime));
+    latestEntries = entries;
 
     tbody.innerHTML = "";
     for (const e of entries) {
@@ -140,9 +275,11 @@ export function initScheduleTab(container) {
       btn.addEventListener("click", async () => {
         if (!confirm("Delete this schedule entry?")) return;
         await deleteDoc(doc(db, "schedule", btn.dataset.id));
-        refreshTable();
+        refreshAll();
       });
     });
+
+    renderCalendar(calendarView, latestEntries, teamNames);
   }
 
   container.querySelector("#addScheduleBtn").addEventListener("click", async () => {
@@ -179,11 +316,11 @@ export function initScheduleTab(container) {
     statusEl.innerHTML = `<div class="status-banner ok">Added "${entry.label}".</div>`;
     labelInput.value = "";
     dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
-    refreshTable();
+    refreshAll();
   });
 
   (async () => {
     await loadTeams();
-    await refreshTable();
+    await refreshAll();
   })();
 }
