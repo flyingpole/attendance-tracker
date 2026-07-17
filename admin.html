@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Attendance Tracker — Admin</title>
+  <link rel="icon" href="assets/favicon.png" />
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="brand">
+      <img src="assets/logo.png" alt="Florida Conquer Volleyball Club" />
+      <div>
+        <h1>Director Console</h1>
+        <div class="subtitle">Florida Conquer — Attendance Tracker</div>
+      </div>
+    </div>
+    <div>
+      <button id="logoutBtn" class="secondary hidden">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Login gate -->
+    <section id="loginSection" class="card" style="max-width:420px; margin:3rem auto;">
+      <h2 style="margin-top:0;">Director login</h2>
+      <div id="loginStatus"></div>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" />
+      <label for="password" style="margin-top:0.75rem;">Password</label>
+      <input id="password" type="password" autocomplete="current-password" />
+      <button id="loginBtn" style="margin-top:1rem;">Log in</button>
+    </section>
+
+    <!-- Admin content (shown once logged in) -->
+    <section id="adminSection" class="hidden">
+      <div class="tabs">
+        <button data-tab="teams" class="active">Teams</button>
+        <button data-tab="roster">Roster Import</button>
+        <button data-tab="schedule">Master Schedule</button>
+        <button data-tab="sessions">Practice Sessions (manual)</button>
+        <button data-tab="badges">Badges</button>
+      </div>
+
+      <div id="tab-teams" class="tab-panel"></div>
+      <div id="tab-roster" class="tab-panel hidden"></div>
+      <div id="tab-schedule" class="tab-panel hidden"></div>
+      <div id="tab-sessions" class="tab-panel hidden"></div>
+      <div id="tab-badges" class="tab-panel hidden"></div>
+    </section>
+  </main>
+
+  <script type="module" src="assets/admin.js"></script>
+</body>
+</html>

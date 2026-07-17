@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Teams, players, and session types are read by the public kiosk page
+    // (to resolve a scanned badge instantly) but only written by the
+    // logged-in director/admin account.
+    match /teams/{teamId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    match /players/{playerId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Master schedule (day/time rules the kiosk uses to auto-detect which
+    // practice a scan belongs to) — same public-read/admin-write pattern.
+    match /schedule/{scheduleId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Attendance scans are created by the unauthenticated kiosk, but nobody
+    // (not even the admin UI) can read/edit/delete them from the client —
+    // only the nightly report job, using the trusted Admin SDK, can read this
+    // data. This keeps a public GitHub Pages URL from leaking attendance
+    // history even to someone poking at the network tab.
+    match /attendance/{recordId} {
+      allow create: if request.resource.data.keys().hasAll(
+                        ['playerId', 'playerName', 'teamId', 'sessionId', 'sessionLabel', 'timestamp']
+                      )
+                      && request.resource.data.playerId is string
+                      && request.resource.data.timestamp == request.time;
+      allow read, update, delete: if false;
+    }
+  }
+}

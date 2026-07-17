@@ -1,0 +1,276 @@
+:root {
+  /* Florida Conquer brand palette, pulled from the club logo */
+  --black: #0a0a0a;
+  --charcoal: #16181c;
+  --teal: #0f7a5f;
+  --teal-light: #16a37c;
+  --teal-dark: #0b5a46;
+  --coral: #e8502c;
+  --coral-dark: #c53e20;
+  --coral-light: #ff8a5c;
+  --silver: #d7dadd;
+  --green: #16a37c;
+  --red: #c53e20;
+  --bg: #f3f5f4;
+  --card: #ffffff;
+  --text: #16181c;
+  --muted: #6b7280;
+  --border: #e1e5e3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header.top-bar {
+  background: linear-gradient(135deg, var(--black) 0%, var(--teal-dark) 160%);
+  color: white;
+  padding: 1.1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  border-bottom: 3px solid var(--coral);
+}
+
+header.top-bar .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+header.top-bar .brand img {
+  height: 48px;
+  width: auto;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
+}
+
+header.top-bar h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+}
+
+header.top-bar .subtitle {
+  color: var(--silver);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--teal);
+  border-radius: 12px;
+  padding: 1.75rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--teal-dark);
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="file"],
+select {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  background: white;
+  color: var(--text);
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(15, 122, 95, 0.15);
+}
+
+button {
+  background: var(--coral);
+  color: white;
+  border: none;
+  padding: 0.65rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+button:hover { background: var(--coral-dark); }
+button.secondary { background: var(--charcoal); }
+button.secondary:hover { background: #2a2d33; }
+button.danger { background: var(--red); }
+button.danger:hover { background: #9e3119; }
+button:disabled { background: #b7bfbd; cursor: not-allowed; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.04em; }
+
+.team-row { cursor: pointer; }
+.team-row:hover { background: #f0f4f3; }
+.team-row .expand-arrow { color: var(--teal); font-size: 0.8rem; width: 1.2rem; }
+.roster-detail td { background: #fafcfb; border-bottom: 2px solid var(--border); }
+.roster-detail table { margin-top: 0.25rem; }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.tabs button {
+  background: white;
+  color: var(--teal-dark);
+  border: 1px solid var(--border);
+}
+
+.tabs button.active {
+  background: var(--teal);
+  color: white;
+  border-color: var(--teal);
+}
+
+.hidden { display: none !important; }
+
+.status-banner {
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.status-banner.ok { background: #e3f5ee; color: var(--teal-dark); border: 1px solid #b9e5d3; }
+.status-banner.error { background: #fce9e4; color: var(--coral-dark); border: 1px solid #f4c3b4; }
+.status-banner.info { background: #eef2f1; color: var(--charcoal); border: 1px solid #d7dedb; }
+
+/* --- Kiosk page --- */
+.kiosk-wrap {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  background: radial-gradient(circle at 50% 0%, var(--teal-dark) 0%, var(--black) 55%);
+  color: white;
+}
+
+.kiosk-wrap .logo {
+  height: 150px;
+  width: auto;
+  margin-bottom: 1rem;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+}
+
+.kiosk-wrap h1 { font-size: 1.9rem; color: white; margin: 0 0 0.25rem 0; letter-spacing: 0.02em; }
+.kiosk-wrap .clock { color: var(--silver); margin-bottom: 2rem; font-size: 1.05rem; }
+
+.kiosk-wrap label { color: var(--silver); }
+
+.session-picker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  max-width: 600px;
+  margin: 0 auto 2rem auto;
+}
+
+.session-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--silver);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  padding: 0.65rem 1.25rem;
+  font-size: 1.05rem;
+}
+
+.session-btn:hover { background: rgba(255, 255, 255, 0.15); }
+
+.session-btn.active {
+  background: var(--teal);
+  color: white;
+  border-color: var(--teal-light);
+}
+
+#scanInput {
+  max-width: 480px;
+  margin: 0 auto;
+  font-size: 1.4rem;
+  text-align: center;
+  padding: 1.1rem;
+  border: 2px solid var(--teal);
+}
+
+#flash {
+  margin-top: 2.5rem;
+  min-height: 4.5rem;
+  font-size: 2rem;
+  font-weight: 700;
+  transition: opacity 0.15s ease;
+}
+
+#flash.ok { color: var(--teal-light); }
+#flash.error { color: var(--coral-light); }
+#flash.idle { color: var(--silver); font-size: 1.1rem; font-weight: 500; }
+
+.kiosk-wrap a { color: var(--silver) !important; }
+
+/* --- Badge sheet preview --- */
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.badge-card {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #fafbfc;
+}
+
+.badge-card img { width: 84px; height: 84px; }
+.badge-card .name { font-weight: 700; }
+.badge-card .team { color: var(--muted); font-size: 0.85rem; }

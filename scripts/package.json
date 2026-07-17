@@ -1,0 +1,12 @@
+{
+  "name": "attendance-tracker-reports",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "report": "node send-daily-report.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "resend": "^3.2.0"
+  }
+}
