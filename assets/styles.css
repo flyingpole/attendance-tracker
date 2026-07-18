@@ -349,38 +349,62 @@ th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size
 /* --- Month grid --- */
 .month-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(100px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  min-width: 720px;
+  width: 100%;
   background: white;
 }
 
 .month-header-cell {
-  padding: 0.4rem;
+  padding: 0.5rem 0.25rem;
   text-align: center;
-  font-weight: 600;
+  font-weight: 700;
   background: var(--charcoal);
   color: white;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .month-day-cell {
-  min-height: 92px;
+  min-height: 110px;
   border-top: 1px solid var(--border);
   border-left: 1px solid var(--border);
-  padding: 0.3rem;
+  padding: 0.35rem;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .month-day-cell.other-month { background: #fafbfc; color: var(--muted); }
 .month-day-cell.today { background: rgba(15, 122, 95, 0.08); }
-.month-day-number { font-size: 0.72rem; font-weight: 700; color: var(--muted); margin-bottom: 0.25rem; }
+
+.month-day-number {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.3rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.month-day-cell.other-month .month-day-number { color: var(--muted); }
+
+.month-day-cell.today .month-day-number span {
+  background: var(--teal);
+  color: white;
+  border-radius: 50%;
+  width: 1.5em;
+  height: 1.5em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .month-event-pill {
   font-size: 0.62rem;
-  padding: 1px 4px;
+  padding: 2px 4px;
   border-radius: 3px;
   color: white;
   margin-bottom: 2px;

@@ -13,8 +13,12 @@ import { POSITIONS } from "./positions.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const PX_PER_HOUR = 56;
-const DRAG_THRESHOLD_PX = 4;
+const DRAG_THRESHOLD_PX = 8; // a real click's mousedown/mouseup rarely land at the exact same pixel
 const SNAP_MINUTES = 5;
+// Must match EARLY_ARRIVAL_GRACE_MINUTES in kiosk.js — the kiosk starts
+// accepting check-ins this many minutes before the official start time, so
+// attendance can exist before the "official" start.
+const EARLY_ARRIVAL_GRACE_MINUTES = 15;
 
 function timeToMinutes(t) {
   const [h, m] = t.split(":").map(Number);
@@ -323,10 +327,12 @@ export function initScheduleTab(container) {
     return records;
   }
 
-  async function showAttendanceForOccurrence(entry, occurrenceDate) {
+  async function showAttendanceForOccurrence(entry, occurrenceDate, inProgress) {
     entryPopupAttendanceWrap.classList.remove("hidden");
     const dateLabel = occurrenceDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-    entryPopupAttendanceTitle.textContent = `Who attended — ${dateLabel}`;
+    entryPopupAttendanceTitle.textContent = inProgress
+      ? `Checked in so far — ${dateLabel} (in progress)`
+      : `Who attended — ${dateLabel}`;
     entryPopupAttendanceList.innerHTML = `<p style="color:var(--muted); margin:0;">Loading…</p>`;
     try {
       const records = await fetchAttendanceFor(entry.id, occurrenceDate);
@@ -367,16 +373,26 @@ export function initScheduleTab(container) {
       ${formatTime(entry.startTime)} – ${formatTime(entry.endTime)}
     `;
 
-    let isPastOccurrence = false;
+    // Show attendance once the check-in window has opened (same 15-minute
+    // early-arrival grace the kiosk uses) — covers a session that's
+    // currently in progress, not just ones that have fully wrapped up.
+    let checkInsPossible = false;
+    let stillInProgress = false;
     if (occurrenceDate) {
+      const [startH, startM] = entry.startTime.split(":").map(Number);
       const [endH, endM] = entry.endTime.split(":").map(Number);
+      const occurrenceStart = new Date(occurrenceDate);
+      occurrenceStart.setHours(startH, startM, 0, 0);
+      const checkInWindowStart = new Date(occurrenceStart.getTime() - EARLY_ARRIVAL_GRACE_MINUTES * 60000);
       const occurrenceEnd = new Date(occurrenceDate);
       occurrenceEnd.setHours(endH, endM, 0, 0);
-      isPastOccurrence = occurrenceEnd < new Date();
+      const now = new Date();
+      checkInsPossible = checkInWindowStart <= now;
+      stillInProgress = checkInsPossible && now < occurrenceEnd;
     }
 
-    if (isPastOccurrence) {
-      showAttendanceForOccurrence(entry, occurrenceDate);
+    if (checkInsPossible) {
+      showAttendanceForOccurrence(entry, occurrenceDate, stillInProgress);
     } else {
       entryPopupAttendanceWrap.classList.add("hidden");
     }
@@ -592,7 +608,7 @@ export function initScheduleTab(container) {
       if (isSameDate(cellDate, today)) classes.push("today");
 
       cellsHtml += `<div class="${classes.join(" ")}">
-        <div class="month-day-number">${cellDate.getDate()}</div>
+        <div class="month-day-number"><span>${cellDate.getDate()}</span></div>
         ${pillsHtml}
       </div>`;
     }
