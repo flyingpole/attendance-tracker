@@ -121,33 +121,40 @@ function timeToMinutes(t) {
   return h * 60 + m;
 }
 
-function isNowInRange(entry, dayOfWeek, nowMinutes) {
+// Players often arrive a few minutes ahead of the official start — count a
+// scan as belonging to a practice if it's within this many minutes early.
+const EARLY_ARRIVAL_GRACE_MINUTES = 15;
+
+function isActiveOrUpcoming(entry, dayOfWeek, nowMinutes) {
   if (!entry.days.includes(dayOfWeek)) return false;
-  return nowMinutes >= timeToMinutes(entry.startTime) && nowMinutes < timeToMinutes(entry.endTime);
+  const start = timeToMinutes(entry.startTime) - EARLY_ARRIVAL_GRACE_MINUTES;
+  const end = timeToMinutes(entry.endTime);
+  return nowMinutes >= start && nowMinutes < end;
 }
 
-// Positional clinics (mixed-team) take priority over a player's own team
-// practice when both happen to be scheduled at the same moment — a
-// positional pull-out is usually deliberate. Falls back to a generic label
-// if nothing on the schedule matches right now, so the scan is never lost.
-function resolveAutoSession(player) {
+// A player's tagged position is NOT used to gate which positional practices
+// they can check into — players frequently cross over (e.g. a setter sitting
+// in on a hitting clinic), so any positional entry that's active/about to
+// start is open to whoever scans during that window; they self-select by
+// physically showing up. Team-practice entries still only match the player's
+// own team. If several entries are live at once (team practice overlapping a
+// positional clinic, or two concurrent positional clinics), one scan logs the
+// player into all of them. Falls back to a generic label if nothing matches,
+// so the scan is never lost.
+function resolveAutoSessions(player) {
   const now = new Date();
   const dayOfWeek = now.getDay();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-  if (player.position) {
-    const posMatch = scheduleEntries.find(
-      (e) => e.type === "position" && e.position === player.position && isNowInRange(e, dayOfWeek, nowMinutes)
-    );
-    if (posMatch) return { id: posMatch.id, label: posMatch.label };
+  const matches = scheduleEntries.filter((e) => {
+    if (!isActiveOrUpcoming(e, dayOfWeek, nowMinutes)) return false;
+    return e.type === "team" ? e.teamId === player.teamId : true;
+  });
+
+  if (matches.length === 0) {
+    return [{ id: "unscheduled", label: "Open/Unscheduled Check-in" }];
   }
-
-  const teamMatch = scheduleEntries.find(
-    (e) => e.type === "team" && e.teamId === player.teamId && isNowInRange(e, dayOfWeek, nowMinutes)
-  );
-  if (teamMatch) return { id: teamMatch.id, label: teamMatch.label };
-
-  return { id: "unscheduled", label: "Open/Unscheduled Check-in" };
+  return matches.map((e) => ({ id: e.id, label: e.label }));
 }
 
 async function handleScan(code) {
@@ -172,18 +179,21 @@ async function handleScan(code) {
   }
 
   const team = teamsById.get(player.teamId);
-  const sessionInfo = manualMode ? selectedSession : resolveAutoSession(player);
+  const sessionInfos = manualMode ? [selectedSession] : resolveAutoSessions(player);
 
   try {
-    await addDoc(collection(db, "attendance"), {
-      playerId: player.id,
-      playerName: player.name,
-      teamId: player.teamId,
-      sessionId: sessionInfo.id,
-      sessionLabel: sessionInfo.label,
-      timestamp: serverTimestamp(),
-    });
-    setFlash(`Welcome, ${player.name} — ${team ? team.name : player.teamId} (${sessionInfo.label})`, "ok");
+    for (const sessionInfo of sessionInfos) {
+      await addDoc(collection(db, "attendance"), {
+        playerId: player.id,
+        playerName: player.name,
+        teamId: player.teamId,
+        sessionId: sessionInfo.id,
+        sessionLabel: sessionInfo.label,
+        timestamp: serverTimestamp(),
+      });
+    }
+    const labels = sessionInfos.map((s) => s.label).join(" + ");
+    setFlash(`Welcome, ${player.name} — ${team ? team.name : player.teamId} (${labels})`, "ok");
   } catch (err) {
     console.error(err);
     setFlash("Error saving check-in. Try scanning again.", "error");

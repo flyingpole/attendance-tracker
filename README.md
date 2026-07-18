@@ -98,10 +98,15 @@ entirely — the PC boots straight into the scan-in screen.
    fix a player's position any time from the roster table itself, without re-importing.
 3. **Set up the master schedule** (Admin → Master Schedule): add an entry for each
    recurring practice block — pick the day(s) of the week, a start/end time, and either
-   a **Team Practice** (matches by the player's team) or a **Positional Practice**
-   (matches by the player's position, for clinics that mix players from different teams).
-   This is what the kiosk uses to figure out what to record — set it up once and it repeats
-   every week.
+   a **Team Practice** (matches by the player's team) or a **Positional Practice** (open
+   to anyone who scans in during that window — players cross over between positional
+   clinics all the time, so it's not restricted by a player's own tagged position; the
+   position you pick is just a label). A scan counts starting 15 minutes before the
+   listed start time, and if more than one entry is active at once (e.g. team practice
+   overlapping a positional clinic), one scan checks the player into all of them. This
+   is what the kiosk uses to figure out what to record — set it up once and it repeats
+   every week. There's also a Calendar view on this tab for a visual weekly layout of
+   everything scheduled.
 4. **Generate badges** (Admin → Badges): pick a team (or a single player), preview,
    then download a printable PDF (2 badges per row, 6 per page) sized for a standard
    luggage-tag holder.
@@ -149,4 +154,6 @@ before running `node scripts/send-daily-report.js`.
 - `sessions/{sessionId}` — `{ label, active, createdAt }` — the manual-override list
   for one-off events not on the recurring schedule.
 - `attendance/{autoId}` — `{ playerId, playerName, teamId, sessionId, sessionLabel, timestamp }`
-  (write-only from the client; only the nightly job, using the Admin SDK, can read it)
+  (write-only from the client; only the nightly job, using the Admin SDK, can read it).
+  A single badge scan can create more than one of these — one per schedule entry that's
+  active at scan time.

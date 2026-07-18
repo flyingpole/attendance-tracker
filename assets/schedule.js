@@ -127,8 +127,12 @@ export function initScheduleTab(container) {
       <p style="color:var(--muted); margin-top:-0.5rem;">
         The kiosk uses this to automatically figure out which practice a player is checking
         into — no need to pick it manually. <strong>Team Practice</strong> entries match by the
-        player's team; <strong>Positional Practice</strong> entries match by the player's
-        position (set on the Roster Import tab) regardless of which team they're on.
+        player's team. <strong>Positional Practice</strong> entries are open to <em>anyone</em>
+        who scans in during that window, regardless of team or their own primary position —
+        players often cross over (a setter sitting in on a hitting clinic, for example), so
+        they self-select just by physically showing up. The position you pick below is only
+        a label for the entry. A scan counts up to 15 minutes before the start time, and if
+        more than one entry is active at once, one scan checks the player into all of them.
       </p>
       <div id="scheduleStatus"></div>
 
