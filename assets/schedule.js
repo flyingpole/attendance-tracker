@@ -2,14 +2,19 @@ import { db } from "./firebase.js";
 import {
   collection,
   addDoc,
+  updateDoc,
   deleteDoc,
   doc,
   getDocs,
+  query,
+  where,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { POSITIONS } from "./positions.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const PX_PER_HOUR = 56;
+const DRAG_THRESHOLD_PX = 4;
+const SNAP_MINUTES = 5;
 
 function timeToMinutes(t) {
   const [h, m] = t.split(":").map(Number);
@@ -17,8 +22,9 @@ function timeToMinutes(t) {
 }
 
 function minutesToTimeStr(mins) {
-  const h = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, mins));
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
@@ -27,6 +33,44 @@ function formatTime(t) {
   const period = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function getSundayOf(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function firstOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date, n) {
+  return new Date(date.getFullYear(), date.getMonth() + n, 1);
+}
+
+function isSameDate(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatShortDate(d) {
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function dateToKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function keyToDate(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 // Assigns overlapping same-day entries to side-by-side "lanes" so they don't
@@ -49,81 +93,10 @@ function assignLanes(events) {
   return placed.map((p) => ({ ...p, laneCount }));
 }
 
-function renderCalendar(container, entries, teamNames) {
-  if (entries.length === 0) {
-    container.innerHTML = `<p style="color:var(--muted);">No schedule entries yet — add one above.</p>`;
-    return;
-  }
-
-  let rangeStart = Math.min(...entries.map((e) => timeToMinutes(e.startTime)));
-  let rangeEnd = Math.max(...entries.map((e) => timeToMinutes(e.endTime)));
-  rangeStart = Math.max(0, Math.floor(rangeStart / 60) * 60 - 60);
-  rangeEnd = Math.min(24 * 60, Math.ceil(rangeEnd / 60) * 60 + 60);
-  const totalHeight = ((rangeEnd - rangeStart) / 60) * PX_PER_HOUR;
-
-  const dayEvents = Array.from({ length: 7 }, () => []);
-  for (const e of entries) {
-    for (const d of e.days) {
-      dayEvents[d].push({
-        ...e,
-        startMin: timeToMinutes(e.startTime),
-        endMin: timeToMinutes(e.endTime),
-      });
-    }
-  }
-
-  let hourLabelsHtml = "";
-  for (let m = rangeStart; m < rangeEnd; m += 60) {
-    hourLabelsHtml += `<div class="calendar-time-label" style="height:${PX_PER_HOUR}px;">${formatTime(minutesToTimeStr(m))}</div>`;
-  }
-
-  const dayColsHtml = dayEvents
-    .map((evs) => {
-      const placed = assignLanes(evs);
-      const blocksHtml = placed
-        .map((ev) => {
-          const top = ((ev.startMin - rangeStart) / 60) * PX_PER_HOUR;
-          const height = Math.max(16, ((ev.endMin - ev.startMin) / 60) * PX_PER_HOUR);
-          const widthPct = 100 / ev.laneCount;
-          const leftPct = ev.lane * widthPct;
-          const matchLabel = ev.type === "team" ? teamNames.get(ev.teamId) || ev.teamId : ev.position;
-          return `<div class="calendar-event ${ev.type}" data-id="${ev.id}"
-            style="top:${top}px; height:${height}px; left:${leftPct}%; width:calc(${widthPct}% - 3px);"
-            title="${ev.label} (${matchLabel}) ${formatTime(ev.startTime)}–${formatTime(ev.endTime)} — click to delete">${ev.label}</div>`;
-        })
-        .join("");
-      const gridLines = `repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent ${PX_PER_HOUR}px)`;
-      return `<div class="calendar-day-col" style="height:${totalHeight}px; background-image:${gridLines};">${blocksHtml}</div>`;
-    })
-    .join("");
-
-  container.innerHTML = `
-    <div class="calendar-grid">
-      <div class="calendar-header-cell"></div>
-      ${DAY_NAMES.map((d) => `<div class="calendar-header-cell">${d}</div>`).join("")}
-      <div>${hourLabelsHtml}</div>
-      ${dayColsHtml}
-    </div>
-    <p style="color:var(--muted); font-size:0.8rem; margin-top:0.5rem;">
-      Teal = Team Practice, Coral = Positional Practice. Click an event to delete it.
-    </p>
-  `;
-
-  container.querySelectorAll(".calendar-event").forEach((el) => {
-    el.addEventListener("click", async () => {
-      if (!confirm("Delete this schedule entry?")) return;
-      await deleteDoc(doc(db, "schedule", el.dataset.id));
-      // Whoever owns the container is responsible for re-rendering — dispatch
-      // a custom event so initScheduleTab's refreshAll can pick it up.
-      container.dispatchEvent(new CustomEvent("schedule-changed", { bubbles: true }));
-    });
-  });
-}
-
 export function initScheduleTab(container) {
   container.innerHTML = `
     <div class="card">
-      <h2 style="margin-top:0;">Add a master schedule entry</h2>
+      <h2 id="scheduleFormTitle" style="margin-top:0;">Add a master schedule entry</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
         The kiosk uses this to automatically figure out which practice a player is checking
         into — no need to pick it manually. <strong>Team Practice</strong> entries match by the
@@ -169,7 +142,10 @@ export function initScheduleTab(container) {
       <label for="scheduleLabel" style="margin-top:0.75rem;">Label (optional — auto-filled if left blank)</label>
       <input id="scheduleLabel" type="text" placeholder="e.g. OH Positional Clinic" />
 
-      <button id="addScheduleBtn" style="margin-top:1rem;">Add to schedule</button>
+      <div style="margin-top:1rem; display:flex; gap:0.5rem;">
+        <button id="addScheduleBtn">Add to schedule</button>
+        <button id="cancelEditBtn" class="secondary hidden">Cancel edit</button>
+      </div>
     </div>
 
     <div class="card">
@@ -177,7 +153,8 @@ export function initScheduleTab(container) {
         <h2 style="margin:0;">Master schedule</h2>
         <div class="tabs" style="margin-bottom:0;">
           <button id="viewListBtn" class="active">List</button>
-          <button id="viewCalendarBtn">Calendar</button>
+          <button id="viewWeekBtn">Week</button>
+          <button id="viewMonthBtn">Month</button>
         </div>
       </div>
 
@@ -188,10 +165,55 @@ export function initScheduleTab(container) {
         </table>
       </div>
 
-      <div id="scheduleCalendarView" class="hidden" style="margin-top:1rem; overflow-x:auto;"></div>
+      <div id="scheduleWeekView" class="hidden" style="margin-top:1rem;">
+        <div class="calendar-nav">
+          <button id="weekPrevBtn" class="secondary">‹ Prev</button>
+          <div id="weekRangeLabel" class="calendar-nav-label"></div>
+          <button id="weekTodayBtn" class="secondary">Today</button>
+          <button id="weekNextBtn" class="secondary">Next ›</button>
+        </div>
+        <div id="weekGridWrap" style="overflow-x:auto;"></div>
+        <p style="color:var(--muted); font-size:0.8rem; margin-top:0.5rem;">
+          Drag an event vertically to change its time. Click an event for more options
+          (including moving it to a different day). Teal = Team Practice, Coral = Positional.
+        </p>
+      </div>
+
+      <div id="scheduleMonthView" class="hidden" style="margin-top:1rem;">
+        <div class="calendar-nav">
+          <button id="monthPrevBtn" class="secondary">‹ Prev</button>
+          <div id="monthRangeLabel" class="calendar-nav-label"></div>
+          <button id="monthTodayBtn" class="secondary">Today</button>
+          <button id="monthNextBtn" class="secondary">Next ›</button>
+        </div>
+        <div id="monthGridWrap" style="overflow-x:auto;"></div>
+      </div>
+
+      <p style="color:var(--muted); font-size:0.8rem; margin-top:0.75rem;">
+        This schedule repeats every week, so browsing to a different week or month shows the
+        same recurring pattern mapped onto those dates — it's a preview, not a date-specific
+        override. For a genuine one-off event, use the manual picker on the kiosk instead.
+      </p>
+    </div>
+
+    <div id="entryPopupOverlay" class="modal-overlay hidden">
+      <div class="modal-box">
+        <h3 id="entryPopupTitle" style="margin-top:0;"></h3>
+        <p id="entryPopupDetails" style="color:var(--muted);"></p>
+        <div id="entryPopupAttendanceWrap" class="hidden" style="margin-top:0.75rem; margin-bottom:0.5rem;">
+          <h4 id="entryPopupAttendanceTitle" style="margin-bottom:0.4rem;"></h4>
+          <div id="entryPopupAttendanceList"></div>
+        </div>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:1rem;">
+          <button id="entryPopupEditBtn">Edit</button>
+          <button id="entryPopupDeleteBtn" class="danger">Delete</button>
+          <button id="entryPopupCloseBtn" class="secondary">Close</button>
+        </div>
+      </div>
     </div>
   `;
 
+  const formTitle = container.querySelector("#scheduleFormTitle");
   const statusEl = container.querySelector("#scheduleStatus");
   const dayCheckboxes = container.querySelector("#dayCheckboxes");
   const startTimeInput = container.querySelector("#startTime");
@@ -202,11 +224,30 @@ export function initScheduleTab(container) {
   const positionPickerWrap = container.querySelector("#positionPickerWrap");
   const positionSelect = container.querySelector("#schedulePosition");
   const labelInput = container.querySelector("#scheduleLabel");
+  const addScheduleBtn = container.querySelector("#addScheduleBtn");
+  const cancelEditBtn = container.querySelector("#cancelEditBtn");
   const tbody = container.querySelector("#scheduleTableBody");
-  const listView = container.querySelector("#scheduleListView");
-  const calendarView = container.querySelector("#scheduleCalendarView");
+
   const viewListBtn = container.querySelector("#viewListBtn");
-  const viewCalendarBtn = container.querySelector("#viewCalendarBtn");
+  const viewWeekBtn = container.querySelector("#viewWeekBtn");
+  const viewMonthBtn = container.querySelector("#viewMonthBtn");
+  const listView = container.querySelector("#scheduleListView");
+  const weekView = container.querySelector("#scheduleWeekView");
+  const monthView = container.querySelector("#scheduleMonthView");
+  const weekGridWrap = container.querySelector("#weekGridWrap");
+  const weekRangeLabel = container.querySelector("#weekRangeLabel");
+  const monthGridWrap = container.querySelector("#monthGridWrap");
+  const monthRangeLabel = container.querySelector("#monthRangeLabel");
+
+  const entryPopupOverlay = container.querySelector("#entryPopupOverlay");
+  const entryPopupTitle = container.querySelector("#entryPopupTitle");
+  const entryPopupDetails = container.querySelector("#entryPopupDetails");
+  const entryPopupAttendanceWrap = container.querySelector("#entryPopupAttendanceWrap");
+  const entryPopupAttendanceTitle = container.querySelector("#entryPopupAttendanceTitle");
+  const entryPopupAttendanceList = container.querySelector("#entryPopupAttendanceList");
+  const entryPopupEditBtn = container.querySelector("#entryPopupEditBtn");
+  const entryPopupDeleteBtn = container.querySelector("#entryPopupDeleteBtn");
+  const entryPopupCloseBtn = container.querySelector("#entryPopupCloseBtn");
 
   for (let d = 0; d < 7; d++) {
     const wrap = document.createElement("label");
@@ -221,24 +262,358 @@ export function initScheduleTab(container) {
     positionPickerWrap.classList.toggle("hidden", isTeam);
   });
 
-  viewListBtn.addEventListener("click", () => {
-    viewListBtn.classList.add("active");
-    viewCalendarBtn.classList.remove("active");
-    listView.classList.remove("hidden");
-    calendarView.classList.add("hidden");
-  });
-  viewCalendarBtn.addEventListener("click", () => {
-    viewCalendarBtn.classList.add("active");
-    viewListBtn.classList.remove("active");
-    calendarView.classList.remove("hidden");
-    listView.classList.add("hidden");
-  });
-
-  container.addEventListener("schedule-changed", refreshAll);
-
   let teamNames = new Map();
   let latestEntries = [];
+  let editingEntryId = null;
+  let weekAnchor = getSundayOf(new Date());
+  let monthAnchor = firstOfMonth(new Date());
+  let currentWeekRangeStart = 0; // minutes; set by renderWeekView, used by drag math
+  let popupEntry = null;
 
+  // --- View switching ---
+  function setView(mode) {
+    viewListBtn.classList.toggle("active", mode === "list");
+    viewWeekBtn.classList.toggle("active", mode === "week");
+    viewMonthBtn.classList.toggle("active", mode === "month");
+    listView.classList.toggle("hidden", mode !== "list");
+    weekView.classList.toggle("hidden", mode !== "week");
+    monthView.classList.toggle("hidden", mode !== "month");
+    if (mode === "week") renderWeekView();
+    if (mode === "month") renderMonthView();
+  }
+  viewListBtn.addEventListener("click", () => setView("list"));
+  viewWeekBtn.addEventListener("click", () => setView("week"));
+  viewMonthBtn.addEventListener("click", () => setView("month"));
+
+  container.querySelector("#weekPrevBtn").addEventListener("click", () => {
+    weekAnchor = addDays(weekAnchor, -7);
+    renderWeekView();
+  });
+  container.querySelector("#weekNextBtn").addEventListener("click", () => {
+    weekAnchor = addDays(weekAnchor, 7);
+    renderWeekView();
+  });
+  container.querySelector("#weekTodayBtn").addEventListener("click", () => {
+    weekAnchor = getSundayOf(new Date());
+    renderWeekView();
+  });
+  container.querySelector("#monthPrevBtn").addEventListener("click", () => {
+    monthAnchor = addMonths(monthAnchor, -1);
+    renderMonthView();
+  });
+  container.querySelector("#monthNextBtn").addEventListener("click", () => {
+    monthAnchor = addMonths(monthAnchor, 1);
+    renderMonthView();
+  });
+  container.querySelector("#monthTodayBtn").addEventListener("click", () => {
+    monthAnchor = firstOfMonth(new Date());
+    renderMonthView();
+  });
+
+  // --- Entry popup (Edit / Delete / past-occurrence attendance) ---
+  async function fetchAttendanceFor(sessionId, date) {
+    const snap = await getDocs(query(collection(db, "attendance"), where("sessionId", "==", sessionId)));
+    const records = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      const ts = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate() : new Date(data.timestamp);
+      if (isSameDate(ts, date)) records.push({ ...data, time: ts });
+    });
+    records.sort((a, b) => a.time - b.time);
+    return records;
+  }
+
+  async function showAttendanceForOccurrence(entry, occurrenceDate) {
+    entryPopupAttendanceWrap.classList.remove("hidden");
+    const dateLabel = occurrenceDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+    entryPopupAttendanceTitle.textContent = `Who attended — ${dateLabel}`;
+    entryPopupAttendanceList.innerHTML = `<p style="color:var(--muted); margin:0;">Loading…</p>`;
+    try {
+      const records = await fetchAttendanceFor(entry.id, occurrenceDate);
+      if (records.length === 0) {
+        entryPopupAttendanceList.innerHTML = `<p style="color:var(--muted); margin:0;">No check-ins recorded for this date.</p>`;
+        return;
+      }
+      entryPopupAttendanceList.innerHTML = `
+        <table>
+          <thead><tr><th>Player</th><th>Arrival</th></tr></thead>
+          <tbody>
+            ${records
+              .map(
+                (r) =>
+                  `<tr><td>${r.playerName}</td><td>${r.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td></tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    } catch (err) {
+      entryPopupAttendanceList.innerHTML = `<p style="color:var(--coral-dark); margin:0;">Couldn't load attendance: ${err.message}</p>`;
+    }
+  }
+
+  function openEntryPopup(entry, occurrenceDate) {
+    popupEntry = entry;
+    const matchLabel = entry.type === "team" ? teamNames.get(entry.teamId) || entry.teamId : entry.position;
+    const daysStr = entry.days
+      .slice()
+      .sort((a, b) => a - b)
+      .map((d) => DAY_NAMES[d])
+      .join(", ");
+    entryPopupTitle.textContent = entry.label;
+    entryPopupDetails.innerHTML = `
+      ${entry.type === "team" ? "Team Practice" : "Positional Practice"} — ${matchLabel}<br>
+      ${daysStr}<br>
+      ${formatTime(entry.startTime)} – ${formatTime(entry.endTime)}
+    `;
+
+    let isPastOccurrence = false;
+    if (occurrenceDate) {
+      const [endH, endM] = entry.endTime.split(":").map(Number);
+      const occurrenceEnd = new Date(occurrenceDate);
+      occurrenceEnd.setHours(endH, endM, 0, 0);
+      isPastOccurrence = occurrenceEnd < new Date();
+    }
+
+    if (isPastOccurrence) {
+      showAttendanceForOccurrence(entry, occurrenceDate);
+    } else {
+      entryPopupAttendanceWrap.classList.add("hidden");
+    }
+
+    entryPopupOverlay.classList.remove("hidden");
+  }
+  function closeEntryPopup() {
+    popupEntry = null;
+    entryPopupOverlay.classList.add("hidden");
+  }
+  entryPopupCloseBtn.addEventListener("click", closeEntryPopup);
+  entryPopupOverlay.addEventListener("click", (e) => {
+    if (e.target === entryPopupOverlay) closeEntryPopup();
+  });
+  entryPopupDeleteBtn.addEventListener("click", async () => {
+    if (!popupEntry) return;
+    if (!confirm(`Delete "${popupEntry.label}"? This cannot be undone.`)) return;
+    await deleteDoc(doc(db, "schedule", popupEntry.id));
+    closeEntryPopup();
+    refreshAll();
+  });
+  entryPopupEditBtn.addEventListener("click", () => {
+    if (!popupEntry) return;
+    startEditing(popupEntry);
+    closeEntryPopup();
+  });
+
+  // --- Edit mode on the add form ---
+  function startEditing(entry) {
+    editingEntryId = entry.id;
+    dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = entry.days.includes(Number(cb.value))));
+    startTimeInput.value = entry.startTime;
+    endTimeInput.value = entry.endTime;
+    typeSelect.value = entry.type;
+    typeSelect.dispatchEvent(new Event("change"));
+    if (entry.type === "team") teamSelect.value = entry.teamId;
+    else positionSelect.value = entry.position;
+    labelInput.value = entry.label;
+    formTitle.textContent = `Editing "${entry.label}"`;
+    addScheduleBtn.textContent = "Save changes";
+    cancelEditBtn.classList.remove("hidden");
+    container.querySelector(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function stopEditing() {
+    editingEntryId = null;
+    formTitle.textContent = "Add a master schedule entry";
+    addScheduleBtn.textContent = "Add to schedule";
+    cancelEditBtn.classList.add("hidden");
+    dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
+    labelInput.value = "";
+  }
+  cancelEditBtn.addEventListener("click", stopEditing);
+
+  // --- Week view rendering + drag-to-move ---
+  function renderWeekView() {
+    const weekEnd = addDays(weekAnchor, 6);
+    weekRangeLabel.textContent =
+      weekAnchor.getMonth() === weekEnd.getMonth()
+        ? `${formatShortDate(weekAnchor)} – ${weekEnd.getDate()}, ${weekEnd.getFullYear()}`
+        : `${formatShortDate(weekAnchor)} – ${formatShortDate(weekEnd)}, ${weekEnd.getFullYear()}`;
+
+    if (latestEntries.length === 0) {
+      weekGridWrap.innerHTML = `<p style="color:var(--muted);">No schedule entries yet — add one above.</p>`;
+      return;
+    }
+
+    let rangeStart = Math.min(...latestEntries.map((e) => timeToMinutes(e.startTime)));
+    let rangeEnd = Math.max(...latestEntries.map((e) => timeToMinutes(e.endTime)));
+    rangeStart = Math.max(0, Math.floor(rangeStart / 60) * 60 - 60);
+    rangeEnd = Math.min(24 * 60, Math.ceil(rangeEnd / 60) * 60 + 60);
+    currentWeekRangeStart = rangeStart;
+    const totalHeight = ((rangeEnd - rangeStart) / 60) * PX_PER_HOUR;
+
+    const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i));
+    const today = new Date();
+
+    let hourLabelsHtml = "";
+    for (let m = rangeStart; m < rangeEnd; m += 60) {
+      hourLabelsHtml += `<div class="calendar-time-label" style="height:${PX_PER_HOUR}px;">${formatTime(minutesToTimeStr(m))}</div>`;
+    }
+
+    const dayColsHtml = weekDates
+      .map((date) => {
+        const dow = date.getDay();
+        const evs = latestEntries
+          .filter((e) => e.days.includes(dow))
+          .map((e) => ({ ...e, startMin: timeToMinutes(e.startTime), endMin: timeToMinutes(e.endTime) }));
+        const placed = assignLanes(evs);
+        const blocksHtml = placed
+          .map((ev) => {
+            const top = ((ev.startMin - rangeStart) / 60) * PX_PER_HOUR;
+            const height = Math.max(16, ((ev.endMin - ev.startMin) / 60) * PX_PER_HOUR);
+            const widthPct = 100 / ev.laneCount;
+            const leftPct = ev.lane * widthPct;
+            const matchLabel = ev.type === "team" ? teamNames.get(ev.teamId) || ev.teamId : ev.position;
+            return `<div class="calendar-event ${ev.type}" data-id="${ev.id}" data-date="${dateToKey(date)}"
+              style="top:${top}px; height:${height}px; left:${leftPct}%; width:calc(${widthPct}% - 3px);"
+              title="${ev.label} (${matchLabel}) ${formatTime(ev.startTime)}–${formatTime(ev.endTime)}">${ev.label}</div>`;
+          })
+          .join("");
+        const gridLines = `repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent ${PX_PER_HOUR}px)`;
+        const todayClass = isSameDate(date, today) ? " today-col" : "";
+        return `<div class="calendar-day-col${todayClass}" style="height:${totalHeight}px; background-image:${gridLines};">${blocksHtml}</div>`;
+      })
+      .join("");
+
+    weekGridWrap.innerHTML = `
+      <div class="calendar-grid">
+        <div class="calendar-header-cell"></div>
+        ${weekDates.map((d) => `<div class="calendar-header-cell">${DAY_NAMES[d.getDay()]}<br>${d.getDate()}</div>`).join("")}
+        <div>${hourLabelsHtml}</div>
+        ${dayColsHtml}
+      </div>
+    `;
+
+    wireWeekEventInteractions();
+  }
+
+  function wireWeekEventInteractions() {
+    weekGridWrap.querySelectorAll(".calendar-event").forEach((el) => {
+      let dragging = false;
+      let moved = false;
+      let startY = 0;
+      let originalTop = 0;
+      let durationMin = 0;
+
+      function onMove(e) {
+        const dy = e.clientY - startY;
+        if (Math.abs(dy) > DRAG_THRESHOLD_PX) moved = true;
+        if (!moved) return;
+        el.classList.add("dragging");
+        const dayCol = el.parentElement;
+        const maxTop = dayCol.clientHeight - el.offsetHeight;
+        const newTop = Math.min(Math.max(0, originalTop + dy), Math.max(0, maxTop));
+        el.style.top = `${newTop}px`;
+      }
+
+      async function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        dragging = false;
+        el.classList.remove("dragging");
+
+        const id = el.dataset.id;
+        if (!moved) {
+          const entry = latestEntries.find((x) => x.id === id);
+          const occurrenceDate = el.dataset.date ? keyToDate(el.dataset.date) : null;
+          if (entry) openEntryPopup(entry, occurrenceDate);
+          return;
+        }
+
+        const finalTop = parseFloat(el.style.top);
+        const rawMinutes = currentWeekRangeStart + (finalTop / PX_PER_HOUR) * 60;
+        const snappedStart = Math.round(rawMinutes / SNAP_MINUTES) * SNAP_MINUTES;
+        const newEnd = snappedStart + durationMin;
+
+        try {
+          await updateDoc(doc(db, "schedule", id), {
+            startTime: minutesToTimeStr(snappedStart),
+            endTime: minutesToTimeStr(newEnd),
+          });
+          statusEl.innerHTML = `<div class="status-banner ok">Updated time for "${el.textContent}".</div>`;
+        } catch (err) {
+          statusEl.innerHTML = `<div class="status-banner error">Couldn't update: ${err.message}</div>`;
+        }
+        refreshAll();
+      }
+
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const entry = latestEntries.find((x) => x.id === el.dataset.id);
+        if (!entry) return;
+        dragging = true;
+        moved = false;
+        startY = e.clientY;
+        originalTop = parseFloat(el.style.top);
+        durationMin = timeToMinutes(entry.endTime) - timeToMinutes(entry.startTime);
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+    });
+  }
+
+  // --- Month view rendering ---
+  function renderMonthView() {
+    monthRangeLabel.textContent = monthAnchor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+    const firstDow = monthAnchor.getDay();
+    const daysInMonth = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 0).getDate();
+    const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
+    const gridStart = addDays(monthAnchor, -firstDow);
+    const today = new Date();
+
+    let cellsHtml = "";
+    for (let i = 0; i < totalCells; i++) {
+      const cellDate = addDays(gridStart, i);
+      const inMonth = cellDate.getMonth() === monthAnchor.getMonth();
+      const dow = cellDate.getDay();
+      const evs = latestEntries
+        .filter((e) => e.days.includes(dow))
+        .slice()
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+      const pillsHtml = evs
+        .map((e) => {
+          const matchLabel = e.type === "team" ? teamNames.get(e.teamId) || e.teamId : e.position;
+          return `<div class="month-event-pill ${e.type}" data-id="${e.id}" data-date="${dateToKey(cellDate)}" title="${e.label} (${matchLabel}) ${formatTime(e.startTime)}–${formatTime(e.endTime)}">${formatTime(e.startTime)} ${e.label}</div>`;
+        })
+        .join("");
+
+      const classes = ["month-day-cell"];
+      if (!inMonth) classes.push("other-month");
+      if (isSameDate(cellDate, today)) classes.push("today");
+
+      cellsHtml += `<div class="${classes.join(" ")}">
+        <div class="month-day-number">${cellDate.getDate()}</div>
+        ${pillsHtml}
+      </div>`;
+    }
+
+    monthGridWrap.innerHTML = `
+      <div class="month-grid">
+        ${DAY_NAMES.map((d) => `<div class="month-header-cell">${d}</div>`).join("")}
+        ${cellsHtml}
+      </div>
+    `;
+
+    monthGridWrap.querySelectorAll(".month-event-pill").forEach((el) => {
+      el.addEventListener("click", () => {
+        const entry = latestEntries.find((x) => x.id === el.dataset.id);
+        const occurrenceDate = el.dataset.date ? keyToDate(el.dataset.date) : null;
+        if (entry) openEntryPopup(entry, occurrenceDate);
+      });
+    });
+  }
+
+  // --- Data loading ---
   async function loadTeams() {
     const snap = await getDocs(collection(db, "teams"));
     teamNames = new Map();
@@ -270,23 +645,34 @@ export function initScheduleTab(container) {
         <td>${e.type === "team" ? "Team Practice" : "Positional"}</td>
         <td>${matchStr}</td>
         <td>${e.label}</td>
-        <td><button data-id="${e.id}" class="danger">Delete</button></td>
+        <td>
+          <button data-action="edit" data-id="${e.id}" class="secondary">Edit</button>
+          <button data-action="delete" data-id="${e.id}" class="danger">Delete</button>
+        </td>
       `;
       tbody.appendChild(tr);
     }
 
-    tbody.querySelectorAll("button[data-id]").forEach((btn) => {
+    tbody.querySelectorAll('button[data-action="edit"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const entry = latestEntries.find((x) => x.id === btn.dataset.id);
+        if (entry) startEditing(entry);
+      });
+    });
+    tbody.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm("Delete this schedule entry?")) return;
+        const entry = latestEntries.find((x) => x.id === btn.dataset.id);
+        if (!confirm(`Delete "${entry ? entry.label : "this entry"}"? This cannot be undone.`)) return;
         await deleteDoc(doc(db, "schedule", btn.dataset.id));
         refreshAll();
       });
     });
 
-    renderCalendar(calendarView, latestEntries, teamNames);
+    if (!weekView.classList.contains("hidden")) renderWeekView();
+    if (!monthView.classList.contains("hidden")) renderMonthView();
   }
 
-  container.querySelector("#addScheduleBtn").addEventListener("click", async () => {
+  addScheduleBtn.addEventListener("click", async () => {
     const days = [...dayCheckboxes.querySelectorAll(".day-cb:checked")].map((cb) => Number(cb.value));
     const startTime = startTimeInput.value;
     const endTime = endTimeInput.value;
@@ -316,10 +702,16 @@ export function initScheduleTab(container) {
     }
     entry.label = labelInput.value.trim() || defaultLabel;
 
-    await addDoc(collection(db, "schedule"), entry);
-    statusEl.innerHTML = `<div class="status-banner ok">Added "${entry.label}".</div>`;
-    labelInput.value = "";
-    dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
+    if (editingEntryId) {
+      await updateDoc(doc(db, "schedule", editingEntryId), entry);
+      statusEl.innerHTML = `<div class="status-banner ok">Updated "${entry.label}".</div>`;
+      stopEditing();
+    } else {
+      await addDoc(collection(db, "schedule"), entry);
+      statusEl.innerHTML = `<div class="status-banner ok">Added "${entry.label}".</div>`;
+      dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
+      labelInput.value = "";
+    }
     refreshAll();
   });
 

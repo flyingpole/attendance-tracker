@@ -43,11 +43,13 @@ export function initRosterTab(container) {
     <div class="card">
       <h2 style="margin-top:0;">Import roster CSV</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
-        Columns: <strong>Name</strong>, <strong>TeamID</strong> (must match an existing team code),
-        optional <strong>Email</strong>, <strong>Jersey</strong>, and <strong>Position</strong>
-        (one of: ${POSITIONS.join(", ")} — used to auto-assign positional practices on the kiosk).
-        Existing players (matched by name + team) are skipped, not duplicated.
+        Columns: <strong>Name</strong>, <strong>TeamID</strong> (must match an existing team code —
+        see the list below), optional <strong>Email</strong>, <strong>Jersey</strong>, and
+        <strong>Position</strong> (one of: ${POSITIONS.join(", ")} — used to auto-assign positional
+        practices on the kiosk). Existing players (matched by name + team) are skipped, not duplicated.
       </p>
+      <p style="margin-bottom:0.25rem;"><strong>Team codes in use:</strong></p>
+      <div id="teamCodesReference" style="margin-bottom:1rem; color:var(--muted); font-size:0.9rem;"></div>
       <button id="templateBtn" class="secondary">Download CSV template</button>
       <label for="csvFile" style="margin-top:1rem;">Roster CSV file</label>
       <input id="csvFile" type="file" accept=".csv" />
@@ -78,6 +80,7 @@ export function initRosterTab(container) {
   const previewWrap = container.querySelector("#previewWrap");
   const previewBody = container.querySelector("#previewBody");
   const rosterBody = container.querySelector("#rosterTableBody");
+  const teamCodesReference = container.querySelector("#teamCodesReference");
 
   container.querySelector("#templateBtn").addEventListener("click", downloadTemplate);
 
@@ -91,6 +94,13 @@ export function initRosterTab(container) {
     const teamNames = new Map();
     teamsSnap.forEach((d) => teamNames.set(d.id, d.data().name));
 
+    teamCodesReference.innerHTML = teamNames.size
+      ? [...teamNames.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([code, name]) => `<code>${code}</code> — ${name}`)
+          .join("<br>")
+      : `No teams yet — add one on the Teams tab first.`;
+
     const players = [];
     playersSnap.forEach((d) => players.push({ id: d.id, ...d.data() }));
     players.sort((a, b) => a.name.localeCompare(b.name));
@@ -101,9 +111,10 @@ export function initRosterTab(container) {
       const positionOptions = [`<option value="">-- none --</option>`]
         .concat(POSITIONS.map((pos) => `<option value="${pos}" ${p.position === pos ? "selected" : ""}>${pos}</option>`))
         .join("");
+      const teamLabel = teamNames.has(p.teamId) ? `${teamNames.get(p.teamId)} (${p.teamId})` : p.teamId;
       tr.innerHTML = `
         <td>${p.name}</td>
-        <td>${teamNames.get(p.teamId) || p.teamId}</td>
+        <td>${teamLabel}</td>
         <td><code>${p.badgeCode}</code></td>
         <td>${p.email || ""}</td>
         <td><select data-id="${p.id}" class="position-select">${positionOptions}</select></td>

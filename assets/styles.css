@@ -318,11 +318,98 @@ th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size
   font-weight: 600;
   color: white;
   overflow: hidden;
-  cursor: pointer;
+  cursor: grab;
   line-height: 1.15;
   box-sizing: border-box;
+  user-select: none;
 }
 
 .calendar-event:hover { outline: 2px solid rgba(0, 0, 0, 0.3); }
 .calendar-event.team { background: var(--teal); }
 .calendar-event.position { background: var(--coral); }
+.calendar-event.dragging { opacity: 0.75; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); cursor: grabbing; z-index: 10; }
+.calendar-day-col.today-col { background-color: rgba(15, 122, 95, 0.05); }
+
+/* --- Week/Month nav controls --- */
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.calendar-nav-label {
+  font-weight: 700;
+  color: var(--teal-dark);
+  min-width: 170px;
+  text-align: center;
+}
+
+/* --- Month grid --- */
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(100px, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 720px;
+  background: white;
+}
+
+.month-header-cell {
+  padding: 0.4rem;
+  text-align: center;
+  font-weight: 600;
+  background: var(--charcoal);
+  color: white;
+  font-size: 0.8rem;
+}
+
+.month-day-cell {
+  min-height: 92px;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  padding: 0.3rem;
+  box-sizing: border-box;
+}
+
+.month-day-cell.other-month { background: #fafbfc; color: var(--muted); }
+.month-day-cell.today { background: rgba(15, 122, 95, 0.08); }
+.month-day-number { font-size: 0.72rem; font-weight: 700; color: var(--muted); margin-bottom: 0.25rem; }
+
+.month-event-pill {
+  font-size: 0.62rem;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: white;
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.month-event-pill.team { background: var(--teal); }
+.month-event-pill.position { background: var(--coral); }
+
+/* --- Entry action popup --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-box {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}

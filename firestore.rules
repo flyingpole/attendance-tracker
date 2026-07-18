@@ -27,18 +27,19 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
-    // Attendance scans are created by the unauthenticated kiosk, but nobody
-    // (not even the admin UI) can read/edit/delete them from the client —
-    // only the nightly report job, using the trusted Admin SDK, can read this
-    // data. This keeps a public GitHub Pages URL from leaking attendance
-    // history even to someone poking at the network tab.
+    // Attendance scans are created by the unauthenticated kiosk. Reading them
+    // back requires the logged-in director/admin account (so the admin
+    // console can show who attended a past practice) — a public, logged-out
+    // visitor to the kiosk URL still can't read attendance history. Records
+    // are otherwise immutable: no client-side edits or deletes.
     match /attendance/{recordId} {
       allow create: if request.resource.data.keys().hasAll(
                         ['playerId', 'playerName', 'teamId', 'sessionId', 'sessionLabel', 'timestamp']
                       )
                       && request.resource.data.playerId is string
                       && request.resource.data.timestamp == request.time;
-      allow read, update, delete: if false;
+      allow read: if request.auth != null;
+      allow update, delete: if false;
     }
   }
 }
