@@ -275,6 +275,34 @@ th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size
 .badge-card .name { font-weight: 700; }
 .badge-card .team { color: var(--muted); font-size: 0.85rem; }
 
+/* --- Badge reprint: sheet-slot picker (mirrors the 3x4 Avery layout) --- */
+.position-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 52px);
+  grid-template-rows: repeat(4, 52px);
+  gap: 6px;
+  margin-top: 0.5rem;
+}
+
+.position-cell {
+  background: white;
+  color: var(--text);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.position-cell:hover { border-color: var(--teal-light); }
+
+.position-cell.selected {
+  background: var(--teal);
+  color: white;
+  border-color: var(--teal);
+}
+
 /* --- Master schedule calendar view --- */
 .calendar-grid {
   display: grid;

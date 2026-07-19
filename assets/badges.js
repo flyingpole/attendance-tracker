@@ -131,6 +131,26 @@ async function buildBadgesPdf(players, teamNames) {
   return doc;
 }
 
+// Prints exactly one badge at a chosen 1-12 slot on the sheet (reading
+// left-to-right, top-to-bottom) and leaves every other slot untouched — for
+// reprinting a single lost badge onto an already-partially-used sheet
+// without wasting the other 11 labels.
+async function buildSingleBadgePdf(player, teamName, position) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "in", format: "letter" });
+  const logo = await loadLogo();
+  const qr = await qrDataUrl(player.badgeCode);
+
+  const index = position - 1;
+  const col = index % COLS;
+  const row = Math.floor(index / COLS);
+  const x = MARGIN_X + col * (TAG_SIZE + GUTTER_X);
+  const y = MARGIN_Y + row * (TAG_SIZE + GUTTER_Y);
+
+  drawBadge(doc, x, y, player, teamName, qr, logo);
+  return doc;
+}
+
 export function initBadgesTab(container) {
   container.innerHTML = `
     <div class="card">
@@ -143,6 +163,12 @@ export function initBadgesTab(container) {
       <select id="teamFilter"></select>
       <label for="playerFilter" style="margin-top:0.75rem;">Single player (optional — leave blank to generate the whole team/all)</label>
       <select id="playerFilter"><option value="">-- Whole selection above --</option></select>
+
+      <div id="positionPickerWrap" class="hidden" style="margin-top:0.75rem;">
+        <label>Reprinting one lost badge? Pick which of the 12 slots on your sheet is still blank:</label>
+        <div id="positionGrid" class="position-grid"></div>
+      </div>
+
       <div style="margin-top:1rem; display:flex; gap:0.5rem;">
         <button id="previewBtn">Preview</button>
         <button id="downloadPdfBtn" class="secondary">Download printable PDF</button>
@@ -154,11 +180,31 @@ export function initBadgesTab(container) {
 
   const teamFilter = container.querySelector("#teamFilter");
   const playerFilter = container.querySelector("#playerFilter");
+  const positionPickerWrap = container.querySelector("#positionPickerWrap");
+  const positionGrid = container.querySelector("#positionGrid");
   const statusEl = container.querySelector("#badgeStatus");
   const previewEl = container.querySelector("#badgePreview");
 
   let allPlayers = [];
   let teamNames = new Map();
+  let selectedPosition = 1;
+
+  for (let i = 1; i <= 12; i++) {
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "position-cell" + (i === selectedPosition ? " selected" : "");
+    cell.textContent = i;
+    cell.addEventListener("click", () => {
+      selectedPosition = i;
+      positionGrid.querySelectorAll(".position-cell").forEach((c) => c.classList.remove("selected"));
+      cell.classList.add("selected");
+    });
+    positionGrid.appendChild(cell);
+  }
+
+  playerFilter.addEventListener("change", () => {
+    positionPickerWrap.classList.toggle("hidden", !playerFilter.value);
+  });
 
   async function loadData() {
     const [playersSnap, teamsSnap] = await Promise.all([
@@ -236,6 +282,16 @@ export function initBadgesTab(container) {
       statusEl.innerHTML = `<div class="status-banner error">No players match that selection.</div>`;
       return;
     }
+
+    if (playerFilter.value) {
+      const p = selection[0];
+      statusEl.innerHTML = `<div class="status-banner info">Building slot ${selectedPosition} for ${p.name}…</div>`;
+      const pdf = await buildSingleBadgePdf(p, teamNames.get(p.teamId) || p.teamId, selectedPosition);
+      pdf.save("badge-reprint.pdf");
+      statusEl.innerHTML = `<div class="status-banner ok">Downloaded badge-reprint.pdf — prints only in slot ${selectedPosition}.</div>`;
+      return;
+    }
+
     statusEl.innerHTML = `<div class="status-banner info">Building PDF for ${selection.length} badge(s)…</div>`;
     const pdf = await buildBadgesPdf(selection, teamNames);
     pdf.save("badges.pdf");
