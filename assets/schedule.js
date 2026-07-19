@@ -2,6 +2,7 @@ import { db } from "./firebase.js";
 import {
   collection,
   addDoc,
+  setDoc,
   updateDoc,
   deleteDoc,
   doc,
@@ -10,6 +11,7 @@ import {
   where,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { POSITIONS } from "./positions.js";
+import { dateToKey, keyToDate, getEntriesForDate } from "./schedule-matching.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const PX_PER_HOUR = 56;
@@ -37,6 +39,11 @@ function formatTime(t) {
   const period = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function formatDateKeyPretty(key) {
+  if (!key) return "";
+  return keyToDate(key).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function getSundayOf(date) {
@@ -68,15 +75,6 @@ function formatShortDate(d) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function dateToKey(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function keyToDate(key) {
-  const [y, m, d] = key.split("-").map(Number);
-  return new Date(y, m - 1, d);
-}
-
 // Assigns overlapping same-day entries to side-by-side "lanes" so they don't
 // visually collide — same approach most calendar UIs use for double-booked slots.
 function assignLanes(events) {
@@ -98,6 +96,8 @@ function assignLanes(events) {
 }
 
 export function initScheduleTab(container) {
+  const todayKey = dateToKey(new Date());
+
   container.innerHTML = `
     <div class="card">
       <h2 id="scheduleFormTitle" style="margin-top:0;">Add a master schedule entry</h2>
@@ -113,10 +113,39 @@ export function initScheduleTab(container) {
       </p>
       <div id="scheduleStatus"></div>
 
-      <label>Days</label>
-      <div id="dayCheckboxes" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.75rem;"></div>
+      <label for="entryKind">Entry type</label>
+      <select id="entryKind">
+        <option value="recurring">Recurring (repeats weekly, within a date range)</option>
+        <option value="single">Single date (one-off event)</option>
+      </select>
 
-      <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+      <div id="recurringFieldsWrap" style="margin-top:0.75rem;">
+        <label>Days</label>
+        <div id="dayCheckboxes" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.75rem;"></div>
+
+        <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+          <div style="flex:1; min-width:160px;">
+            <label for="seriesStartDate">Starts on</label>
+            <input id="seriesStartDate" type="date" />
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <label for="seriesEndDate">Ends on (optional — leave blank if ongoing)</label>
+            <input id="seriesEndDate" type="date" />
+          </div>
+        </div>
+        <p style="color:var(--muted); font-size:0.8rem; margin-top:0.4rem; margin-bottom:0;">
+          Set an end date when a team's schedule changes for a new season instead of editing the
+          old entry — add a new one for the new days/times starting when the old one ends, so
+          history stays accurate.
+        </p>
+      </div>
+
+      <div id="singleDateFieldWrap" class="hidden" style="margin-top:0.75rem;">
+        <label for="singleDate">Date</label>
+        <input id="singleDate" type="date" />
+      </div>
+
+      <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.75rem;">
         <div style="flex:1; min-width:140px;">
           <label for="startTime">Start time</label>
           <input id="startTime" type="time" value="18:00" />
@@ -162,9 +191,9 @@ export function initScheduleTab(container) {
         </div>
       </div>
 
-      <div id="scheduleListView" style="margin-top:1rem;">
+      <div id="scheduleListView" style="margin-top:1rem; overflow-x:auto;">
         <table>
-          <thead><tr><th>Days</th><th>Time</th><th>Type</th><th>Matches</th><th>Label</th><th></th></tr></thead>
+          <thead><tr><th>Days</th><th>Dates</th><th>Time</th><th>Type</th><th>Matches</th><th>Label</th><th></th></tr></thead>
           <tbody id="scheduleTableBody"></tbody>
         </table>
       </div>
@@ -178,8 +207,8 @@ export function initScheduleTab(container) {
         </div>
         <div id="weekGridWrap" style="overflow-x:auto;"></div>
         <p style="color:var(--muted); font-size:0.8rem; margin-top:0.5rem;">
-          Drag an event vertically to change its time. Click an event for more options
-          (including moving it to a different day). Teal = Team Practice, Coral = Positional.
+          Drag an event vertically to change its time. Click an event for more options.
+          Teal = Team Practice, Coral = Positional.
         </p>
       </div>
 
@@ -194,10 +223,22 @@ export function initScheduleTab(container) {
       </div>
 
       <p style="color:var(--muted); font-size:0.8rem; margin-top:0.75rem;">
-        This schedule repeats every week, so browsing to a different week or month shows the
-        same recurring pattern mapped onto those dates — it's a preview, not a date-specific
-        override. For a genuine one-off event, use the manual picker on the kiosk instead.
+        Recurring entries only show up on dates inside their start/end range, so old and new
+        season schedules don't overlap into the future. Week/Month views reflect real
+        cancellations and one-off single-date events for the specific dates shown.
       </p>
+    </div>
+
+    <div class="card hidden" id="cancellationsCard">
+      <h2 style="margin-top:0;">Canceled occurrences</h2>
+      <p style="color:var(--muted); margin-top:-0.5rem;">
+        Single dates pulled out of a recurring series (e.g. a holiday). Restore removes the
+        cancellation so that date goes back to normal.
+      </p>
+      <table>
+        <thead><tr><th>Series</th><th>Canceled date</th><th></th></tr></thead>
+        <tbody id="cancellationsTableBody"></tbody>
+      </table>
     </div>
 
     <div id="entryPopupOverlay" class="modal-overlay hidden">
@@ -210,6 +251,7 @@ export function initScheduleTab(container) {
         </div>
         <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:1rem;">
           <button id="entryPopupEditBtn">Edit</button>
+          <button id="entryPopupCancelOccurrenceBtn" class="danger">Cancel this date only</button>
           <button id="entryPopupDeleteBtn" class="danger">Delete</button>
           <button id="entryPopupCloseBtn" class="secondary">Close</button>
         </div>
@@ -219,7 +261,13 @@ export function initScheduleTab(container) {
 
   const formTitle = container.querySelector("#scheduleFormTitle");
   const statusEl = container.querySelector("#scheduleStatus");
+  const entryKindSelect = container.querySelector("#entryKind");
+  const recurringFieldsWrap = container.querySelector("#recurringFieldsWrap");
+  const singleDateFieldWrap = container.querySelector("#singleDateFieldWrap");
+  const singleDateInput = container.querySelector("#singleDate");
   const dayCheckboxes = container.querySelector("#dayCheckboxes");
+  const seriesStartDateInput = container.querySelector("#seriesStartDate");
+  const seriesEndDateInput = container.querySelector("#seriesEndDate");
   const startTimeInput = container.querySelector("#startTime");
   const endTimeInput = container.querySelector("#endTime");
   const typeSelect = container.querySelector("#scheduleType");
@@ -243,6 +291,9 @@ export function initScheduleTab(container) {
   const monthGridWrap = container.querySelector("#monthGridWrap");
   const monthRangeLabel = container.querySelector("#monthRangeLabel");
 
+  const cancellationsCard = container.querySelector("#cancellationsCard");
+  const cancellationsTableBody = container.querySelector("#cancellationsTableBody");
+
   const entryPopupOverlay = container.querySelector("#entryPopupOverlay");
   const entryPopupTitle = container.querySelector("#entryPopupTitle");
   const entryPopupDetails = container.querySelector("#entryPopupDetails");
@@ -250,6 +301,7 @@ export function initScheduleTab(container) {
   const entryPopupAttendanceTitle = container.querySelector("#entryPopupAttendanceTitle");
   const entryPopupAttendanceList = container.querySelector("#entryPopupAttendanceList");
   const entryPopupEditBtn = container.querySelector("#entryPopupEditBtn");
+  const entryPopupCancelOccurrenceBtn = container.querySelector("#entryPopupCancelOccurrenceBtn");
   const entryPopupDeleteBtn = container.querySelector("#entryPopupDeleteBtn");
   const entryPopupCloseBtn = container.querySelector("#entryPopupCloseBtn");
 
@@ -260,6 +312,15 @@ export function initScheduleTab(container) {
     dayCheckboxes.appendChild(wrap);
   }
 
+  seriesStartDateInput.value = todayKey;
+  singleDateInput.value = todayKey;
+
+  entryKindSelect.addEventListener("change", () => {
+    const isRecurring = entryKindSelect.value === "recurring";
+    recurringFieldsWrap.classList.toggle("hidden", !isRecurring);
+    singleDateFieldWrap.classList.toggle("hidden", isRecurring);
+  });
+
   typeSelect.addEventListener("change", () => {
     const isTeam = typeSelect.value === "team";
     teamPickerWrap.classList.toggle("hidden", !isTeam);
@@ -268,11 +329,13 @@ export function initScheduleTab(container) {
 
   let teamNames = new Map();
   let latestEntries = [];
+  let latestCancellations = [];
   let editingEntryId = null;
   let weekAnchor = getSundayOf(new Date());
   let monthAnchor = firstOfMonth(new Date());
   let currentWeekRangeStart = 0; // minutes; set by renderWeekView, used by drag math
   let popupEntry = null;
+  let popupOccurrenceDate = null;
 
   // --- View switching ---
   function setView(mode) {
@@ -314,7 +377,7 @@ export function initScheduleTab(container) {
     renderMonthView();
   });
 
-  // --- Entry popup (Edit / Delete / past-occurrence attendance) ---
+  // --- Entry popup (Edit / Cancel-this-date / Delete-series / past-occurrence attendance) ---
   async function fetchAttendanceFor(sessionId, date) {
     const snap = await getDocs(query(collection(db, "attendance"), where("sessionId", "==", sessionId)));
     const records = [];
@@ -360,18 +423,32 @@ export function initScheduleTab(container) {
 
   function openEntryPopup(entry, occurrenceDate) {
     popupEntry = entry;
+    popupOccurrenceDate = occurrenceDate;
+    const isRecurring = entry.kind !== "single";
     const matchLabel = entry.type === "team" ? teamNames.get(entry.teamId) || entry.teamId : entry.position;
-    const daysStr = entry.days
-      .slice()
-      .sort((a, b) => a - b)
-      .map((d) => DAY_NAMES[d])
-      .join(", ");
+
+    let whenStr;
+    if (isRecurring) {
+      const daysStr = (entry.days || [])
+        .slice()
+        .sort((a, b) => a - b)
+        .map((d) => DAY_NAMES[d])
+        .join(", ");
+      const rangeStr = `${entry.startDate ? formatDateKeyPretty(entry.startDate) : "no start set"} – ${entry.endDate ? formatDateKeyPretty(entry.endDate) : "ongoing"}`;
+      whenStr = `${daysStr} (${rangeStr})`;
+    } else {
+      whenStr = `One-off — ${formatDateKeyPretty(entry.date)}`;
+    }
+
     entryPopupTitle.textContent = entry.label;
     entryPopupDetails.innerHTML = `
       ${entry.type === "team" ? "Team Practice" : "Positional Practice"} — ${matchLabel}<br>
-      ${daysStr}<br>
+      ${whenStr}<br>
       ${formatTime(entry.startTime)} – ${formatTime(entry.endTime)}
     `;
+
+    entryPopupCancelOccurrenceBtn.classList.toggle("hidden", !isRecurring || !occurrenceDate);
+    entryPopupDeleteBtn.textContent = isRecurring ? "Delete entire series" : "Delete";
 
     // Show attendance once the check-in window has opened (same 15-minute
     // early-arrival grace the kiosk uses) — covers a session that's
@@ -401,15 +478,31 @@ export function initScheduleTab(container) {
   }
   function closeEntryPopup() {
     popupEntry = null;
+    popupOccurrenceDate = null;
     entryPopupOverlay.classList.add("hidden");
   }
   entryPopupCloseBtn.addEventListener("click", closeEntryPopup);
   entryPopupOverlay.addEventListener("click", (e) => {
     if (e.target === entryPopupOverlay) closeEntryPopup();
   });
+  entryPopupCancelOccurrenceBtn.addEventListener("click", async () => {
+    if (!popupEntry || !popupOccurrenceDate) return;
+    const dateLabel = popupOccurrenceDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    if (!confirm(`Cancel just the ${dateLabel} occurrence of "${popupEntry.label}"? The rest of the series is unaffected.`)) return;
+    await addDoc(collection(db, "scheduleCancellations"), {
+      scheduleId: popupEntry.id,
+      date: dateToKey(popupOccurrenceDate),
+    });
+    closeEntryPopup();
+    refreshAll();
+  });
   entryPopupDeleteBtn.addEventListener("click", async () => {
     if (!popupEntry) return;
-    if (!confirm(`Delete "${popupEntry.label}"? This cannot be undone.`)) return;
+    const isRecurring = popupEntry.kind !== "single";
+    const msg = isRecurring
+      ? `Delete the ENTIRE recurring series "${popupEntry.label}"? This removes every past and future occurrence, not just this one. This cannot be undone.`
+      : `Delete "${popupEntry.label}"? This cannot be undone.`;
+    if (!confirm(msg)) return;
     await deleteDoc(doc(db, "schedule", popupEntry.id));
     closeEntryPopup();
     refreshAll();
@@ -423,7 +516,18 @@ export function initScheduleTab(container) {
   // --- Edit mode on the add form ---
   function startEditing(entry) {
     editingEntryId = entry.id;
-    dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = entry.days.includes(Number(cb.value))));
+    const kind = entry.kind === "single" ? "single" : "recurring";
+    entryKindSelect.value = kind;
+    entryKindSelect.dispatchEvent(new Event("change"));
+
+    if (kind === "recurring") {
+      dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = (entry.days || []).includes(Number(cb.value))));
+      seriesStartDateInput.value = entry.startDate || todayKey;
+      seriesEndDateInput.value = entry.endDate || "";
+    } else {
+      singleDateInput.value = entry.date || todayKey;
+    }
+
     startTimeInput.value = entry.startTime;
     endTimeInput.value = entry.endTime;
     typeSelect.value = entry.type;
@@ -441,7 +545,12 @@ export function initScheduleTab(container) {
     formTitle.textContent = "Add a master schedule entry";
     addScheduleBtn.textContent = "Add to schedule";
     cancelEditBtn.classList.add("hidden");
+    entryKindSelect.value = "recurring";
+    entryKindSelect.dispatchEvent(new Event("change"));
     dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
+    seriesStartDateInput.value = todayKey;
+    seriesEndDateInput.value = "";
+    singleDateInput.value = todayKey;
     labelInput.value = "";
   }
   cancelEditBtn.addEventListener("click", stopEditing);
@@ -476,10 +585,11 @@ export function initScheduleTab(container) {
 
     const dayColsHtml = weekDates
       .map((date) => {
-        const dow = date.getDay();
-        const evs = latestEntries
-          .filter((e) => e.days.includes(dow))
-          .map((e) => ({ ...e, startMin: timeToMinutes(e.startTime), endMin: timeToMinutes(e.endTime) }));
+        const evs = getEntriesForDate(date, latestEntries, latestCancellations).map((e) => ({
+          ...e,
+          startMin: timeToMinutes(e.startTime),
+          endMin: timeToMinutes(e.endTime),
+        }));
         const placed = assignLanes(evs);
         const blocksHtml = placed
           .map((ev) => {
@@ -590,9 +700,7 @@ export function initScheduleTab(container) {
     for (let i = 0; i < totalCells; i++) {
       const cellDate = addDays(gridStart, i);
       const inMonth = cellDate.getMonth() === monthAnchor.getMonth();
-      const dow = cellDate.getDay();
-      const evs = latestEntries
-        .filter((e) => e.days.includes(dow))
+      const evs = getEntriesForDate(cellDate, latestEntries, latestCancellations)
         .slice()
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
@@ -629,6 +737,29 @@ export function initScheduleTab(container) {
     });
   }
 
+  // --- Cancellations management ---
+  function renderCancellations() {
+    if (latestCancellations.length === 0) {
+      cancellationsCard.classList.add("hidden");
+      return;
+    }
+    cancellationsCard.classList.remove("hidden");
+    const sorted = latestCancellations.slice().sort((a, b) => a.date.localeCompare(b.date));
+    cancellationsTableBody.innerHTML = sorted
+      .map((c) => {
+        const parent = latestEntries.find((e) => e.id === c.scheduleId);
+        const label = parent ? parent.label : "(deleted series)";
+        return `<tr><td>${label}</td><td>${formatDateKeyPretty(c.date)}</td><td><button data-id="${c.id}" class="secondary">Restore</button></td></tr>`;
+      })
+      .join("");
+    cancellationsTableBody.querySelectorAll("button[data-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await deleteDoc(doc(db, "scheduleCancellations", btn.dataset.id));
+        refreshAll();
+      });
+    });
+  }
+
   // --- Data loading ---
   async function loadTeams() {
     const snap = await getDocs(collection(db, "teams"));
@@ -639,24 +770,42 @@ export function initScheduleTab(container) {
       .join("");
   }
 
+  function sortKeyFor(e) {
+    return e.kind === "single" ? e.date || "" : e.startDate || "";
+  }
+
   async function refreshAll() {
-    const snap = await getDocs(collection(db, "schedule"));
+    const [scheduleSnap, cancelSnap] = await Promise.all([
+      getDocs(collection(db, "schedule")),
+      getDocs(collection(db, "scheduleCancellations")),
+    ]);
+
     const entries = [];
-    snap.forEach((d) => entries.push({ id: d.id, ...d.data() }));
-    entries.sort((a, b) => (Math.min(...a.days) - Math.min(...b.days)) || a.startTime.localeCompare(b.startTime));
+    scheduleSnap.forEach((d) => entries.push({ id: d.id, ...d.data() }));
+    entries.sort((a, b) => sortKeyFor(a).localeCompare(sortKeyFor(b)) || a.startTime.localeCompare(b.startTime));
     latestEntries = entries;
+
+    latestCancellations = [];
+    cancelSnap.forEach((d) => latestCancellations.push({ id: d.id, ...d.data() }));
 
     tbody.innerHTML = "";
     for (const e of entries) {
-      const daysStr = e.days
-        .slice()
-        .sort((a, b) => a - b)
-        .map((d) => DAY_NAMES[d])
-        .join(", ");
+      const isRecurring = e.kind !== "single";
+      const daysStr = isRecurring
+        ? (e.days || [])
+            .slice()
+            .sort((a, b) => a - b)
+            .map((d) => DAY_NAMES[d])
+            .join(", ")
+        : "One-off";
+      const datesStr = isRecurring
+        ? `${e.startDate ? formatDateKeyPretty(e.startDate) : "(no start set)"} – ${e.endDate ? formatDateKeyPretty(e.endDate) : "ongoing"}`
+        : formatDateKeyPretty(e.date);
       const matchStr = e.type === "team" ? teamNames.get(e.teamId) || e.teamId : e.position;
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${daysStr}</td>
+        <td>${datesStr}</td>
         <td>${formatTime(e.startTime)} – ${formatTime(e.endTime)}</td>
         <td>${e.type === "team" ? "Team Practice" : "Positional"}</td>
         <td>${matchStr}</td>
@@ -678,32 +827,60 @@ export function initScheduleTab(container) {
     tbody.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener("click", async () => {
         const entry = latestEntries.find((x) => x.id === btn.dataset.id);
-        if (!confirm(`Delete "${entry ? entry.label : "this entry"}"? This cannot be undone.`)) return;
+        const isRecurring = entry?.kind !== "single";
+        const msg = isRecurring
+          ? `Delete the entire recurring series "${entry ? entry.label : "this entry"}"? This cannot be undone.`
+          : `Delete "${entry ? entry.label : "this entry"}"? This cannot be undone.`;
+        if (!confirm(msg)) return;
         await deleteDoc(doc(db, "schedule", btn.dataset.id));
         refreshAll();
       });
     });
+
+    renderCancellations();
 
     if (!weekView.classList.contains("hidden")) renderWeekView();
     if (!monthView.classList.contains("hidden")) renderMonthView();
   }
 
   addScheduleBtn.addEventListener("click", async () => {
-    const days = [...dayCheckboxes.querySelectorAll(".day-cb:checked")].map((cb) => Number(cb.value));
+    const kind = entryKindSelect.value;
     const startTime = startTimeInput.value;
     const endTime = endTimeInput.value;
     const type = typeSelect.value;
 
-    if (days.length === 0) {
-      statusEl.innerHTML = `<div class="status-banner error">Pick at least one day.</div>`;
-      return;
-    }
     if (!startTime || !endTime || startTime >= endTime) {
       statusEl.innerHTML = `<div class="status-banner error">Enter a valid start/end time (end must be after start).</div>`;
       return;
     }
 
-    const entry = { days, startTime, endTime, type };
+    const entry = { kind, startTime, endTime, type };
+
+    if (kind === "recurring") {
+      const days = [...dayCheckboxes.querySelectorAll(".day-cb:checked")].map((cb) => Number(cb.value));
+      if (days.length === 0) {
+        statusEl.innerHTML = `<div class="status-banner error">Pick at least one day.</div>`;
+        return;
+      }
+      if (!seriesStartDateInput.value) {
+        statusEl.innerHTML = `<div class="status-banner error">Pick a start date for the series.</div>`;
+        return;
+      }
+      if (seriesEndDateInput.value && seriesEndDateInput.value < seriesStartDateInput.value) {
+        statusEl.innerHTML = `<div class="status-banner error">End date can't be before the start date.</div>`;
+        return;
+      }
+      entry.days = days;
+      entry.startDate = seriesStartDateInput.value;
+      entry.endDate = seriesEndDateInput.value || null;
+    } else {
+      if (!singleDateInput.value) {
+        statusEl.innerHTML = `<div class="status-banner error">Pick a date.</div>`;
+        return;
+      }
+      entry.date = singleDateInput.value;
+    }
+
     let defaultLabel;
     if (type === "team") {
       if (!teamSelect.value) {
@@ -719,13 +896,19 @@ export function initScheduleTab(container) {
     entry.label = labelInput.value.trim() || defaultLabel;
 
     if (editingEntryId) {
-      await updateDoc(doc(db, "schedule", editingEntryId), entry);
+      // Full overwrite (not merge) so switching kind during an edit doesn't
+      // leave stale fields from the other kind (e.g. old `days` sticking
+      // around on an entry just converted to a single date).
+      await setDoc(doc(db, "schedule", editingEntryId), entry);
       statusEl.innerHTML = `<div class="status-banner ok">Updated "${entry.label}".</div>`;
       stopEditing();
     } else {
       await addDoc(collection(db, "schedule"), entry);
       statusEl.innerHTML = `<div class="status-banner ok">Added "${entry.label}".</div>`;
       dayCheckboxes.querySelectorAll(".day-cb").forEach((cb) => (cb.checked = false));
+      seriesStartDateInput.value = todayKey;
+      seriesEndDateInput.value = "";
+      singleDateInput.value = todayKey;
       labelInput.value = "";
     }
     refreshAll();

@@ -27,6 +27,13 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
+    // Per-occurrence cancellations for a recurring schedule entry (e.g. one
+    // Tuesday is skipped for a holiday, without ending the whole series).
+    match /scheduleCancellations/{cancellationId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
     // Attendance scans are created by the unauthenticated kiosk. Reading them
     // back requires the logged-in director/admin account (so the admin
     // console can show who attended a past practice) — a public, logged-out

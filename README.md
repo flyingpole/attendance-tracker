@@ -104,25 +104,38 @@ entirely — the PC boots straight into the scan-in screen.
    upload it. Each new player gets a unique badge code automatically. You can also set or
    fix a player's position any time from the roster table itself, without re-importing.
 3. **Set up the master schedule** (Admin → Master Schedule): add an entry for each
-   recurring practice block — pick the day(s) of the week, a start/end time, and either
-   a **Team Practice** (matches by the player's team) or a **Positional Practice** (open
-   to anyone who scans in during that window — players cross over between positional
-   clinics all the time, so it's not restricted by a player's own tagged position; the
-   position you pick is just a label). A scan counts starting 15 minutes before the
-   listed start time, and if more than one entry is active at once (e.g. team practice
-   overlapping a positional clinic), one scan checks the player into all of them. This
-   is what the kiosk uses to figure out what to record — set it up once and it repeats
-   every week. There's also a Calendar view on this tab for a visual weekly layout of
-   everything scheduled.
+   practice block. Two entry types:
+   - **Recurring** — pick the day(s) of the week, a start/end time, and a **start date**
+     (required) and **end date** (optional — leave blank if ongoing). The date range keeps
+     old and new seasons from overlapping: when a team's practice days change (e.g. Mon/Tue
+     one season, Wed/Thu the next), end the old entry the day the change happens and add a
+     new one starting there, rather than editing the old one in place.
+   - **Single date** — a one-off event on exactly one date, not part of any recurring
+     pattern (a special clinic, a tournament day, etc.).
+
+   Either kind is either a **Team Practice** (matches by the player's team) or a
+   **Positional Practice** (open to anyone who scans in during that window — players cross
+   over between positional clinics all the time, so it's not restricted by a player's own
+   tagged position; the position you pick is just a label). A scan counts starting 15
+   minutes before the listed start time, and if more than one entry is active at once (e.g.
+   team practice overlapping a positional clinic), one scan checks the player into all of
+   them. This is what the kiosk uses to figure out what to record.
+
+   The Week/Month calendar views on this tab show the schedule as it actually applies to
+   real dates (respecting each entry's date range). Click any event on the calendar for
+   options: **Edit**, **Cancel this date only** (pulls a single occurrence out of a
+   recurring series — e.g. a holiday — without ending the whole series; undo it anytime
+   from the "Canceled occurrences" list at the bottom of this tab), or **Delete entire
+   series**. Dragging an event vertically on the Week view adjusts its time.
 4. **Generate badges** (Admin → Badges): pick a team (or a single player), preview,
-   then download a printable PDF (2 badges per row, 6 per page) sized for a standard
-   luggage-tag holder.
+   then download a printable PDF sized for **Avery Presta® 94107** (2" × 2" square labels,
+   12 per sheet) — just print, no cutting needed.
 5. On practice days, players just scan in — the kiosk automatically detects which
-   practice they're attending from the schedule. For a one-off event not on the
-   recurring schedule (tournament, makeup practice), click **"Switch to manual picker"**
-   on the kiosk and pick from the **Practice Sessions** list instead (Admin → Practice
-   Sessions manages that list). If nothing on the schedule matches at scan time, it's
-   still recorded, just labeled "Open/Unscheduled Check-in" so nothing gets lost.
+   practice they're attending from the schedule. For something not worth adding to the
+   schedule at all, click **"Switch to manual picker"** on the kiosk and pick from the
+   **Practice Sessions** list instead (Admin → Practice Sessions manages that list). If
+   nothing matches at scan time, it's still recorded, just labeled "Open/Unscheduled
+   Check-in" so nothing gets lost.
 6. Every night, the director gets one email with every team's check-ins, and each
    coach with an email on file gets their own team's check-ins.
 
@@ -155,9 +168,15 @@ before running `node scripts/send-daily-report.js`.
 
 - `teams/{teamId}` — `{ name, coachName, coachEmail }`
 - `players/{playerId}` — `{ name, teamId, badgeCode, email, jersey, position, active }`
-- `schedule/{scheduleId}` — `{ days: [0-6, ...], startTime: "18:00", endTime: "20:00", type: "team"|"position", teamId, position, label }`
-  — the master schedule the kiosk uses to auto-detect a practice. `days` uses
-  JS's `Date.getDay()` numbering (0 = Sunday … 6 = Saturday).
+- `schedule/{scheduleId}` — the master schedule the kiosk uses to auto-detect a practice.
+  Two shapes, distinguished by `kind`:
+  - Recurring: `{ kind: "recurring", days: [0-6, ...], startDate: "2026-01-05", endDate: "2026-05-20" | null, startTime, endTime, type: "team"|"position", teamId, position, label }`.
+    `days` uses JS's `Date.getDay()` numbering (0 = Sunday … 6 = Saturday). `endDate: null`
+    means still ongoing. Entries created before this field existed have no `startDate`/`endDate`
+    and are treated as unbounded until edited.
+  - Single date: `{ kind: "single", date: "2026-03-14", startTime, endTime, type, teamId, position, label }`.
+- `scheduleCancellations/{id}` — `{ scheduleId, date }` — pulls one specific date out of a
+  recurring `schedule` entry (e.g. a holiday) without ending the whole series.
 - `sessions/{sessionId}` — `{ label, active, createdAt }` — the manual-override list
   for one-off events not on the recurring schedule.
 - `attendance/{autoId}` — `{ playerId, playerName, teamId, sessionId, sessionLabel, timestamp }`

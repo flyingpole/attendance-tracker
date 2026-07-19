@@ -7,6 +7,7 @@ import {
   addDoc,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getEntriesForDate } from "./schedule-matching.js";
 
 const scanInput = document.getElementById("scanInput");
 const flash = document.getElementById("flash");
@@ -20,6 +21,7 @@ const manualPickerWrap = document.getElementById("manualPickerWrap");
 let teamsById = new Map();
 let playersByBadge = new Map();
 let scheduleEntries = [];
+let scheduleCancellations = [];
 let processing = false;
 let selectedSession = null; // { id, label } — used only in manual mode
 let manualMode = false;
@@ -94,9 +96,14 @@ async function loadSessions() {
 }
 
 async function loadSchedule() {
-  const snap = await getDocs(collection(db, "schedule"));
+  const [scheduleSnap, cancelSnap] = await Promise.all([
+    getDocs(collection(db, "schedule")),
+    getDocs(collection(db, "scheduleCancellations")),
+  ]);
   scheduleEntries = [];
-  snap.forEach((doc) => scheduleEntries.push({ id: doc.id, ...doc.data() }));
+  scheduleSnap.forEach((doc) => scheduleEntries.push({ id: doc.id, ...doc.data() }));
+  scheduleCancellations = [];
+  cancelSnap.forEach((doc) => scheduleCancellations.push(doc.data()));
 }
 
 async function loadRoster() {
@@ -125,8 +132,7 @@ function timeToMinutes(t) {
 // scan as belonging to a practice if it's within this many minutes early.
 const EARLY_ARRIVAL_GRACE_MINUTES = 15;
 
-function isActiveOrUpcoming(entry, dayOfWeek, nowMinutes) {
-  if (!entry.days.includes(dayOfWeek)) return false;
+function isTimeActiveOrUpcoming(entry, nowMinutes) {
   const start = timeToMinutes(entry.startTime) - EARLY_ARRIVAL_GRACE_MINUTES;
   const end = timeToMinutes(entry.endTime);
   return nowMinutes >= start && nowMinutes < end;
@@ -141,13 +147,18 @@ function isActiveOrUpcoming(entry, dayOfWeek, nowMinutes) {
 // positional clinic, or two concurrent positional clinics), one scan logs the
 // player into all of them. Falls back to a generic label if nothing matches,
 // so the scan is never lost.
+//
+// Which entries are even in play today is resolved by getEntriesForDate,
+// which also honors each recurring entry's start/end date range (so a team's
+// old Mon/Tue slot from last season doesn't still show up after they moved
+// to Wed/Thu this season) and any one-off cancellations for today specifically.
 function resolveAutoSessions(player) {
   const now = new Date();
-  const dayOfWeek = now.getDay();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const todaysEntries = getEntriesForDate(now, scheduleEntries, scheduleCancellations);
 
-  const matches = scheduleEntries.filter((e) => {
-    if (!isActiveOrUpcoming(e, dayOfWeek, nowMinutes)) return false;
+  const matches = todaysEntries.filter((e) => {
+    if (!isTimeActiveOrUpcoming(e, nowMinutes)) return false;
     return e.type === "team" ? e.teamId === player.teamId : true;
   });
 
