@@ -3,13 +3,13 @@
 // scans and email a summary to the director and each team's coach.
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
 const TZ = process.env.REPORT_TIMEZONE || "America/New_York";
-const FROM_EMAIL = process.env.FROM_EMAIL || "reports@example.com";
 const DIRECTOR_EMAIL = process.env.DIRECTOR_EMAIL;
+const FROM_NAME = process.env.FROM_NAME || "Florida Conquer Attendance";
 
-for (const required of ["FIREBASE_SERVICE_ACCOUNT", "RESEND_API_KEY", "DIRECTOR_EMAIL"]) {
+for (const required of ["FIREBASE_SERVICE_ACCOUNT", "GMAIL_USER", "GMAIL_APP_PASSWORD", "DIRECTOR_EMAIL"]) {
   if (!process.env[required]) {
     console.error(`Missing required environment variable: ${required}`);
     process.exit(1);
@@ -19,7 +19,20 @@ for (const required of ["FIREBASE_SERVICE_ACCOUNT", "RESEND_API_KEY", "DIRECTOR_
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 initializeApp({ credential: cert(serviceAccount) });
 const db = getFirestore();
-const resend = new Resend(process.env.RESEND_API_KEY);
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+});
+
+async function sendEmail({ to, subject, html }) {
+  await transporter.sendMail({
+    from: `"${FROM_NAME}" <${process.env.GMAIL_USER}>`,
+    to,
+    subject,
+    html,
+  });
+}
 
 function localDateStr(date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(date); // YYYY-MM-DD
@@ -91,8 +104,7 @@ async function main() {
     }
   }
 
-  await resend.emails.send({
-    from: FROM_EMAIL,
+  await sendEmail({
     to: DIRECTOR_EMAIL,
     subject: `Attendance Summary — ${dateHeading}`,
     html: directorBody,
@@ -107,8 +119,7 @@ async function main() {
       continue;
     }
     const body = `<h2>${escapeHtml(team.name)} Attendance — ${dateHeading}</h2>${renderTeamTable(teamRecords)}`;
-    await resend.emails.send({
-      from: FROM_EMAIL,
+    await sendEmail({
       to: team.coachEmail,
       subject: `${team.name} Attendance — ${dateHeading}`,
       html: body,

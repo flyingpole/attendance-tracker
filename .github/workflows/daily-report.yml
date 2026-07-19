@@ -23,7 +23,7 @@ jobs:
       - run: node send-daily-report.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           REPORT_TIMEZONE: "America/New_York"

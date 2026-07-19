@@ -2,7 +2,7 @@
 
 Scan-in kiosk + roster/badge admin + nightly attendance emails, built to run entirely
 on free hosting: **GitHub Pages** (frontend) + **Firebase Firestore** (database) +
-**GitHub Actions** (nightly report job) + **Resend** (email delivery).
+**GitHub Actions** (nightly report job) + **Gmail SMTP** (email delivery).
 
 ## How it works
 
@@ -39,14 +39,21 @@ on free hosting: **GitHub Pages** (frontend) + **Firebase Firestore** (database)
    - Name: `FIREBASE_SERVICE_ACCOUNT`
    - Value: the entire contents of that JSON file.
 
-### 3. Email delivery (Resend)
+### 3. Email delivery (Gmail)
 
-1. Create a free account at [resend.com](https://resend.com) (100 emails/day free).
-2. Verify a sending domain or use their onboarding test address, then create an API key.
-3. Add these repo secrets (same **Settings → Secrets and variables → Actions** page):
-   - `RESEND_API_KEY` — your Resend API key
+No new account needed — this uses a Gmail address you already have. Regular Gmail
+passwords don't work for programmatic sending, so you need an **App Password** instead:
+
+1. On the Google account that will send the reports: [myaccount.google.com/security](https://myaccount.google.com/security) → turn on **2-Step Verification** if it isn't already on (required for App Passwords to be available).
+2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) → create a new app password (name it anything, e.g. "Attendance Tracker") → copy the 16-character password it gives you.
+3. Add these repo secrets (**Settings → Secrets and variables → Actions → New repository secret**):
+   - `GMAIL_USER` — the full Gmail address (e.g. `you@gmail.com`)
+   - `GMAIL_APP_PASSWORD` — the 16-character app password from step 2 (not your regular Gmail password)
    - `DIRECTOR_EMAIL` — the director's email address (receives the full daily summary)
-   - `FROM_EMAIL` — the "from" address to send as (must be on your verified Resend domain)
+
+Gmail caps regular accounts at 500 sends/day, far more than a club needs. If you'd
+rather use a dedicated transactional service instead (e.g. Resend, SendGrid) later,
+swap the `nodemailer` transport in `scripts/send-daily-report.js` for their SDK.
 
 ### 4. GitHub Pages
 
@@ -122,7 +129,7 @@ entirely — the PC boots straight into the scan-in screen.
 ## Local development / testing
 
 You can build and test this entirely offline using the **Firebase Local Emulator Suite**,
-without touching your real Firebase project or Resend quota:
+without touching your real Firebase project or sending real email:
 
 ```sh
 npm install -g firebase-tools

@@ -2,8 +2,6 @@ import { db } from "./firebase.js";
 import { collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm";
 
-const SLOGAN = "SWEAT   •   BATTLE   •   BELIEVE";
-
 // Brand palette (matches assets/styles.css)
 const COLOR_TEAL = [15, 122, 95];
 const COLOR_TEAL_DARK = [11, 90, 70];
@@ -11,10 +9,17 @@ const COLOR_CORAL = [232, 80, 44];
 const COLOR_BLACK = [10, 10, 10];
 const COLOR_MUTED = [107, 114, 128];
 
-// Standard printable luggage-tag insert size (Avery-style), in inches.
-// Adjust here if your actual tag holders are a different size.
-const TAG_W = 4.25;
-const TAG_H = 2.25;
+// Avery Presta® 94107 — 2" x 2" square labels, 12 per US Letter sheet
+// (3 columns x 4 rows). Margins/gaps below match Avery's official die-cut
+// layout exactly (0.625" left/right margin + gap, 0.6" top/bottom margin +
+// gap) — verified they sum precisely to 8.5" x 11" with symmetric margins.
+const TAG_SIZE = 2.0;
+const COLS = 3;
+const ROWS = 4;
+const MARGIN_X = 0.625;
+const MARGIN_Y = 0.6;
+const GUTTER_X = 0.625;
+const GUTTER_Y = 0.6;
 
 async function qrDataUrl(text) {
   return await QRCode.toDataURL(text, { width: 300, margin: 1, color: { dark: "#0a0a0a" } });
@@ -52,102 +57,71 @@ function fitOneLine(doc, text, maxWidth) {
 }
 
 function drawBadge(doc, x, y, player, teamName, qr, logo) {
-  const leftBarW = 0.14;
+  const centerX = x + TAG_SIZE / 2;
+  const maxTextWidth = TAG_SIZE - 0.24;
 
-  // Cut-guide border
-  doc.setDrawColor(210, 210, 210);
-  doc.setLineWidth(0.01);
-  doc.roundedRect(x, y, TAG_W, TAG_H, 0.08, 0.08);
-
-  // Left accent bar
-  doc.setFillColor(...COLOR_TEAL);
-  doc.rect(x, y, leftBarW, TAG_H, "F");
-
-  const padX = 0.2;
-  const contentX = x + leftBarW + padX;
+  // Thin brand-colored border (these are die-cut adhesive labels — no
+  // cutting needed, this is purely decorative).
+  doc.setDrawColor(...COLOR_TEAL);
+  doc.setLineWidth(0.015);
+  doc.roundedRect(x + 0.03, y + 0.03, TAG_SIZE - 0.06, TAG_SIZE - 0.06, 0.06, 0.06);
 
   // Logo
-  const logoH = 0.8;
+  const logoH = 0.38;
   const logoW = logoH * logo.aspect;
-  doc.addImage(logo.dataUrl, "PNG", contentX, y + 0.18, logoW, logoH);
-
-  const textX = contentX + logoW + 0.18;
-  const qrSize = 1.05;
-  const qrX = x + TAG_W - qrSize - 0.2;
-  const textMaxWidth = qrX - 0.1 - textX;
+  doc.addImage(logo.dataUrl, "PNG", centerX - logoW / 2, y + 0.1, logoW, logoH);
 
   // Name
   doc.setTextColor(...COLOR_BLACK);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(fitOneLine(doc, player.name, textMaxWidth), textX, y + 0.5);
+  doc.setFontSize(11);
+  doc.text(fitOneLine(doc, player.name, maxTextWidth), centerX, y + 0.66, { align: "center" });
 
   // Team
   doc.setTextColor(...COLOR_TEAL_DARK);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(fitOneLine(doc, teamName, textMaxWidth), textX, y + 0.78);
+  doc.setFontSize(8);
+  doc.text(fitOneLine(doc, teamName, maxTextWidth), centerX, y + 0.8, { align: "center" });
 
-  // Divider rule
+  // Divider
   doc.setDrawColor(...COLOR_CORAL);
-  doc.setLineWidth(0.02);
-  doc.line(contentX, y + 1.12, qrX - 0.1, y + 1.12);
-
-  // Slogan
-  doc.setTextColor(...COLOR_CORAL);
-  doc.setFont("helvetica", "italic");
-  doc.setFontSize(7.5);
-  doc.text(fitOneLine(doc, SLOGAN, textMaxWidth), contentX, y + 1.32);
-
-  // Club name under logo
-  doc.setTextColor(...COLOR_MUTED);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6.5);
-  doc.text("FLORIDA CONQUER VOLLEYBALL CLUB", contentX, y + TAG_H - 0.15, {
-    maxWidth: logoW + textMaxWidth,
-  });
-
-  // QR code, right side
-  const qrY = y + (TAG_H - qrSize) / 2 - 0.08;
-  doc.setDrawColor(...COLOR_TEAL);
   doc.setLineWidth(0.015);
-  doc.roundedRect(qrX - 0.05, qrY - 0.05, qrSize + 0.1, qrSize + 0.1, 0.05, 0.05);
+  doc.line(x + 0.3, y + 0.88, x + TAG_SIZE - 0.3, y + 0.88);
+
+  // QR code
+  const qrSize = 0.88;
+  const qrX = centerX - qrSize / 2;
+  const qrY = y + 0.94;
   doc.addImage(qr, "PNG", qrX, qrY, qrSize, qrSize);
 
+  // Badge code (tiny reference text below the QR)
   doc.setTextColor(...COLOR_MUTED);
   doc.setFont("courier", "normal");
   doc.setFontSize(6.5);
-  doc.text(player.badgeCode, qrX + qrSize / 2, qrY + qrSize + 0.14, { align: "center" });
+  doc.text(player.badgeCode, centerX, qrY + qrSize + 0.13, { align: "center" });
 }
 
 async function buildBadgesPdf(players, teamNames) {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "in", format: "letter", orientation: "landscape" });
+  const doc = new jsPDF({ unit: "in", format: "letter" }); // portrait
   const logo = await loadLogo();
-
-  const cols = 2;
-  const rows = 3;
-  const marginX = 0.75;
-  const gutterX = 0.5;
-  const marginY = 0.5;
-  const gutterY = 0.375;
 
   let col = 0;
   let row = 0;
 
   for (let i = 0; i < players.length; i++) {
     const p = players[i];
-    const x = marginX + col * (TAG_W + gutterX);
-    const y = marginY + row * (TAG_H + gutterY);
+    const x = MARGIN_X + col * (TAG_SIZE + GUTTER_X);
+    const y = MARGIN_Y + row * (TAG_SIZE + GUTTER_Y);
 
     const qr = await qrDataUrl(p.badgeCode);
     drawBadge(doc, x, y, p, teamNames.get(p.teamId) || p.teamId, qr, logo);
 
     col++;
-    if (col === cols) {
+    if (col === COLS) {
       col = 0;
       row++;
-      if (row === rows && i < players.length - 1) {
+      if (row === ROWS && i < players.length - 1) {
         doc.addPage();
         row = 0;
       }
@@ -162,7 +136,8 @@ export function initBadgesTab(container) {
     <div class="card">
       <h2 style="margin-top:0;">Generate badges</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
-        Printable size: ${TAG_W}" × ${TAG_H}" — standard luggage-tag insert size, 6 per landscape sheet with cut guides.
+        Sized for <strong>Avery Presta® 94107</strong> (2" × 2" square labels, 12 per sheet) —
+        just load the sheet in your printer and print, no cutting needed.
       </p>
       <label for="teamFilter">Team</label>
       <select id="teamFilter"></select>
