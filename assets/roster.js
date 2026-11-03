@@ -116,10 +116,18 @@ export function initRosterTab(container) {
       const positionOptions = [`<option value="">-- none --</option>`]
         .concat(POSITIONS.map((pos) => `<option value="${pos}" ${p.position === pos ? "selected" : ""}>${pos}</option>`))
         .join("");
-      const teamLabel = teamNames.has(p.teamId) ? `${teamNames.get(p.teamId)} (${p.teamId})` : p.teamId;
+      // Players get reassigned between teams often, so the team is an editable
+      // dropdown. A player whose team no longer exists still shows its old code.
+      const teamOptions = (teamNames.has(p.teamId) ? [] : [`<option value="${escapeHtml(p.teamId)}" selected>${escapeHtml(p.teamId)} (team not found)</option>`])
+        .concat(
+          [...teamNames.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([code, name]) => `<option value="${escapeHtml(code)}" ${p.teamId === code ? "selected" : ""}>${escapeHtml(name)} (${escapeHtml(code)})</option>`)
+        )
+        .join("");
       tr.innerHTML = `
         <td>${p.name}</td>
-        <td>${teamLabel}</td>
+        <td><select data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.teamId)}" class="team-select">${teamOptions}</select></td>
         <td><code>${p.badgeCode}</code></td>
         <td>${p.email || ""}</td>
         <td><select data-id="${p.id}" class="position-select">${positionOptions}</select></td>
@@ -130,6 +138,24 @@ export function initRosterTab(container) {
     rosterBody.querySelectorAll(".position-select").forEach((sel) => {
       sel.addEventListener("change", async () => {
         await updateDoc(doc(db, "players", sel.dataset.id), { position: sel.value });
+      });
+    });
+
+    rosterBody.querySelectorAll(".team-select").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const label = sel.options[sel.selectedIndex].text;
+        if (!confirm(`Move ${sel.dataset.name} to ${label}?`)) {
+          sel.value = sel.dataset.current;
+          return;
+        }
+        try {
+          await updateDoc(doc(db, "players", sel.dataset.id), { teamId: sel.value });
+          sel.dataset.current = sel.value;
+          statusEl.innerHTML = `<div class="status-banner ok">Moved ${escapeHtml(sel.dataset.name)} to ${escapeHtml(label)}. Their badge code is unchanged; reprint their tag if you want it to show the new team.</div>`;
+        } catch (err) {
+          sel.value = sel.dataset.current;
+          showError(`Couldn't move ${sel.dataset.name}: ${err.message}`);
+        }
       });
     });
   }

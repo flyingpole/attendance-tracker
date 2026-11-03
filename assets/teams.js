@@ -3,12 +3,25 @@ import {
   collection,
   doc,
   setDoc,
-  deleteDoc,
+  updateDoc,
   getDocs,
   query,
   where,
-  limit,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Firestore batches hold at most 500 writes.
+async function deleteRefs(db, refs) {
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = writeBatch(db);
+    refs.slice(i, i + 400).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+}
 
 export function initTeamsTab(container) {
   container.innerHTML = `
@@ -47,6 +60,13 @@ export function initTeamsTab(container) {
   const tbody = container.querySelector("#teamsTableBody");
 
   let editingExisting = false;
+  let allTeams = [];
+
+  function showStatus(kind, message) {
+    statusEl.innerHTML = `<div class="status-banner ${kind}">${escapeHtml(message)}</div>`;
+    // The banner is in the form card, above a long team list — make sure it's seen.
+    statusEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 
   function clearForm() {
     teamIdInput.value = "";
@@ -78,6 +98,10 @@ export function initTeamsTab(container) {
     detailTr.appendChild(td);
     tr.after(detailTr);
 
+    await loadRoster(td, team);
+  }
+
+  async function loadRoster(td, team) {
     const playersSnap = await getDocs(query(collection(db, "players"), where("teamId", "==", team.id)));
     const players = [];
     playersSnap.forEach((d) => players.push({ id: d.id, ...d.data() }));
@@ -85,27 +109,56 @@ export function initTeamsTab(container) {
 
     const coachLine =
       team.coachName || team.coachEmail
-        ? `<strong>Coach:</strong> ${team.coachName || "(no name)"}${team.coachEmail ? ` — ${team.coachEmail}` : ""}`
+        ? `<strong>Coach:</strong> ${escapeHtml(team.coachName) || "(no name)"}${team.coachEmail ? ` — ${escapeHtml(team.coachEmail)}` : ""}`
         : `<em>No coach assigned yet.</em>`;
+
+    const moveOptions = [`<option value="">Move to…</option>`]
+      .concat(
+        allTeams
+          .filter((t) => t.id !== team.id)
+          .map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.id)} — ${escapeHtml(t.name)}</option>`)
+      )
+      .join("");
 
     const rosterRows = players.length
       ? players
           .map(
             (p) =>
-              `<tr><td>${p.name}</td><td>${p.position || ""}</td><td><code>${p.badgeCode}</code></td><td>${p.jersey || ""}</td><td>${p.email || ""}</td></tr>`
+              `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.position)}</td><td><code>${escapeHtml(p.badgeCode)}</code></td><td>${escapeHtml(p.jersey)}</td><td>${escapeHtml(p.email)}</td><td><select class="move-select" data-id="${p.id}" data-name="${escapeHtml(p.name)}">${moveOptions}</select></td></tr>`
           )
           .join("")
-      : `<tr><td colspan="5" style="color:var(--muted);">No players imported for this team yet.</td></tr>`;
+      : `<tr><td colspan="6" style="color:var(--muted);">No players imported for this team yet.</td></tr>`;
 
     td.innerHTML = `
       <div style="padding:0.75rem 0.25rem;">
         <div style="margin-bottom:0.6rem;">${coachLine}</div>
         <table>
-          <thead><tr><th>Player</th><th>Position</th><th>Badge code</th><th>Jersey</th><th>Email</th></tr></thead>
+          <thead><tr><th>Player</th><th>Position</th><th>Badge code</th><th>Jersey</th><th>Email</th><th>Reassign</th></tr></thead>
           <tbody>${rosterRows}</tbody>
         </table>
       </div>
     `;
+
+    td.querySelectorAll(".move-select").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const targetId = sel.value;
+        if (!targetId) return;
+        const target = allTeams.find((t) => t.id === targetId);
+        const targetLabel = target ? `${target.id} — ${target.name}` : targetId;
+        if (!confirm(`Move ${sel.dataset.name} to ${targetLabel}?`)) {
+          sel.value = "";
+          return;
+        }
+        try {
+          await updateDoc(doc(db, "players", sel.dataset.id), { teamId: targetId });
+          showStatus("ok", `Moved ${sel.dataset.name} to ${targetLabel}. Their badge code is unchanged; reprint their tag if you want it to show the new team.`);
+          await loadRoster(td, team);
+        } catch (err) {
+          sel.value = "";
+          showStatus("error", `Couldn't move ${sel.dataset.name}: ${err.message}`);
+        }
+      });
+    });
   }
 
   async function refreshTable() {
@@ -113,6 +166,7 @@ export function initTeamsTab(container) {
     const teams = [];
     snap.forEach((d) => teams.push({ id: d.id, ...d.data() }));
     teams.sort((a, b) => a.id.localeCompare(b.id));
+    allTeams = teams;
 
     tbody.innerHTML = "";
     for (const t of teams) {
@@ -153,16 +207,38 @@ export function initTeamsTab(container) {
     tbody.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener("click", async () => {
         const teamId = btn.dataset.id;
-        const playersSnap = await getDocs(
-          query(collection(db, "players"), where("teamId", "==", teamId), limit(1))
-        );
-        if (!playersSnap.empty) {
-          statusEl.innerHTML = `<div class="status-banner error">Can't delete "${teamId}" — it still has players on the roster.</div>`;
-          return;
+        try {
+          const [playersSnap, scheduleSnap] = await Promise.all([
+            getDocs(query(collection(db, "players"), where("teamId", "==", teamId))),
+            getDocs(query(collection(db, "schedule"), where("teamId", "==", teamId))),
+          ]);
+          const playerCount = playersSnap.size;
+          const scheduleCount = scheduleSnap.size;
+
+          const lines = [`Delete team "${teamId}"?`];
+          if (playerCount || scheduleCount) lines.push("");
+          if (playerCount) lines.push(`• ${playerCount} player(s) on its roster will be removed (move them to another team first if you want to keep them).`);
+          if (scheduleCount) lines.push(`• ${scheduleCount} master-schedule entr${scheduleCount === 1 ? "y" : "ies"} for this team will be removed.`);
+          if (playerCount || scheduleCount) lines.push("• Past attendance records are kept.");
+          lines.push("", "This cannot be undone.");
+          if (!confirm(lines.join("\n"))) return;
+
+          const refs = [];
+          playersSnap.forEach((d) => refs.push(d.ref));
+          for (const entry of scheduleSnap.docs) {
+            const cancelSnap = await getDocs(query(collection(db, "scheduleCancellations"), where("scheduleId", "==", entry.id)));
+            cancelSnap.forEach((d) => refs.push(d.ref));
+            refs.push(entry.ref);
+          }
+          refs.push(doc(db, "teams", teamId));
+          await deleteRefs(db, refs);
+
+          showStatus("ok", `Deleted team "${teamId}"${playerCount ? ` and its ${playerCount} player(s)` : ""}.`);
+          refreshTable();
+        } catch (err) {
+          const hint = err.code === "permission-denied" ? " You may have been signed out — reload this page and log in again." : "";
+          showStatus("error", `Couldn't delete "${teamId}": ${String(err.message).replace(/\.$/, "")}.${hint}`);
         }
-        if (!confirm(`Delete team "${teamId}"? This cannot be undone.`)) return;
-        await deleteDoc(doc(db, "teams", teamId));
-        refreshTable();
       });
     });
   }
