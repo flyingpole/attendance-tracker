@@ -22,7 +22,8 @@ jobs:
       - run: npm install
       - run: node send-daily-report.js
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # The key was saved in GitHub as "SERVICE_ACCOUNT"; accept either name.
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}

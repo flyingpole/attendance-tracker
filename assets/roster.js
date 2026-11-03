@@ -7,12 +7,10 @@ import {
   updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { POSITIONS } from "./positions.js";
+import { classifyRows, describeNothingToImport, rosterKey } from "./roster-parse.js";
 
-function normalizePosition(raw) {
-  const trimmed = (raw || "").trim();
-  if (!trimmed) return "";
-  const match = POSITIONS.find((p) => p.toLowerCase() === trimmed.toLowerCase());
-  return match || "";
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function genBadgeCode(existingCodes) {
@@ -27,8 +25,11 @@ function genBadgeCode(existingCodes) {
   return code;
 }
 
-function downloadTemplate() {
-  const csv = `Name,TeamID,Email,Jersey,Position\nJane Smith,U14A,jane@example.com,7,${POSITIONS[0]}\n`;
+// The single placeholder row uses a real team code from the database so the
+// file passes through the importer end to end, but it's flagged EXAMPLE and
+// never actually imported.
+function downloadTemplate(sampleTeamCode) {
+  const csv = `Name,TeamID,Email,Jersey,Position\nEXAMPLE - delete this row,${sampleTeamCode},jane@example.com,7,${POSITIONS[0]}\n`;
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -43,10 +44,12 @@ export function initRosterTab(container) {
     <div class="card">
       <h2 style="margin-top:0;">Import roster CSV</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
-        Columns: <strong>Name</strong>, <strong>TeamID</strong> (must match an existing team code —
-        see the list below), optional <strong>Email</strong>, <strong>Jersey</strong>, and
-        <strong>Position</strong> (one of: ${POSITIONS.join(", ")} — used to auto-assign positional
-        practices on the kiosk). Existing players (matched by name + team) are skipped, not duplicated.
+        Columns: <strong>Name</strong> and <strong>TeamID</strong> (a team code from the list below —
+        capitalization doesn't matter, and the team's full name works too), plus optional
+        <strong>Email</strong>, <strong>Jersey</strong>, and <strong>Position</strong>
+        (one of: ${POSITIONS.join(", ")}). Header names are flexible — "Team ID", "Team" and
+        "Player Name" all work. Players already on the roster (same name + team) are skipped,
+        and the template's EXAMPLE row is never imported.
       </p>
       <p style="margin-bottom:0.25rem;"><strong>Team codes in use:</strong></p>
       <div id="teamCodesReference" style="margin-bottom:1rem; color:var(--muted); font-size:0.9rem;"></div>
@@ -82,7 +85,8 @@ export function initRosterTab(container) {
   const rosterBody = container.querySelector("#rosterTableBody");
   const teamCodesReference = container.querySelector("#teamCodesReference");
 
-  container.querySelector("#templateBtn").addEventListener("click", downloadTemplate);
+  let sampleTeamCode = "TEAMCODE";
+  container.querySelector("#templateBtn").addEventListener("click", () => downloadTemplate(sampleTeamCode));
 
   let parsedRows = [];
 
@@ -93,6 +97,7 @@ export function initRosterTab(container) {
     ]);
     const teamNames = new Map();
     teamsSnap.forEach((d) => teamNames.set(d.id, d.data().name));
+    if (teamNames.size) sampleTeamCode = [...teamNames.keys()].sort()[0];
 
     teamCodesReference.innerHTML = teamNames.size
       ? [...teamNames.entries()]
@@ -129,102 +134,116 @@ export function initRosterTab(container) {
     });
   }
 
-  container.querySelector("#csvFile").addEventListener("change", async (e) => {
+  const csvInput = container.querySelector("#csvFile");
+  const importBtn = container.querySelector("#importBtn");
+
+  function showError(message) {
+    statusEl.innerHTML = `<div class="status-banner error">${escapeHtml(message)}</div>`;
+  }
+
+  csvInput.addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    const [teamsSnap, playersSnap] = await Promise.all([
-      getDocs(collection(db, "teams")),
-      getDocs(collection(db, "players")),
-    ]);
-    const validTeamIds = new Set();
-    teamsSnap.forEach((d) => validTeamIds.add(d.id));
-    const existingKey = new Set();
-    playersSnap.forEach((d) => {
-      const p = d.data();
-      existingKey.add(`${p.teamId}::${p.name.trim().toLowerCase()}`);
-    });
+    // Clear the input right away: browsers ignore picking the *same* file
+    // again, so without this a corrected file with the same name never loads.
+    csvInput.value = "";
+    parsedRows = [];
+    previewWrap.classList.add("hidden");
+    statusEl.innerHTML = `<div class="status-banner info">Reading ${escapeHtml(file.name)}…</div>`;
+
+    let teams;
+    let existingKeys;
+    try {
+      const [teamsSnap, playersSnap] = await Promise.all([
+        getDocs(collection(db, "teams")),
+        getDocs(collection(db, "players")),
+      ]);
+      teams = new Map();
+      teamsSnap.forEach((d) => teams.set(d.id, d.data()));
+      existingKeys = new Set();
+      playersSnap.forEach((d) => existingKeys.add(rosterKey(d.data().teamId, d.data().name)));
+    } catch (err) {
+      showError(`Couldn't reach the database: ${err.message}`);
+      return;
+    }
 
     Papa.parse(file, {
       header: true,
-      skipEmptyLines: true,
+      skipEmptyLines: "greedy",
+      error: (err) => showError(`Couldn't read that file: ${err.message}`),
       complete: (results) => {
-        parsedRows = results.data.map((row) => {
-          const name = (row.Name || "").trim();
-          const teamId = (row.TeamID || "").trim();
-          const email = (row.Email || "").trim();
-          const jersey = (row.Jersey || "").trim();
-          const position = normalizePosition(row.Position);
-          const positionNote = row.Position && !position ? ` (unrecognized: "${row.Position}")` : "";
-
-          let status = "Will import";
-          let willImport = true;
-          if (!name || !teamId) {
-            status = "Skipped — missing Name/TeamID";
-            willImport = false;
-          } else if (!validTeamIds.has(teamId)) {
-            status = `Skipped — unknown team "${teamId}"`;
-            willImport = false;
-          } else if (existingKey.has(`${teamId}::${name.toLowerCase()}`)) {
-            status = "Skipped — already on roster";
-            willImport = false;
-          } else {
-            status += positionNote;
-          }
-
-          return { name, teamId, email, jersey, position, status, willImport };
-        });
+        parsedRows = classifyRows(results.data, teams, existingKeys);
+        const importable = parsedRows.filter((r) => r.willImport).length;
 
         previewBody.innerHTML = "";
         for (const r of parsedRows) {
           const tr = document.createElement("tr");
-          tr.innerHTML = `<td>${r.name}</td><td>${r.teamId}</td><td>${r.email}</td><td>${r.jersey}</td><td>${r.position}</td><td>${r.status}</td>`;
+          tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.teamId || r.teamRaw)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.jersey)}</td><td>${escapeHtml(r.position)}</td><td>${escapeHtml(r.status)}</td>`;
           previewBody.appendChild(tr);
         }
-        previewWrap.classList.remove("hidden");
-        statusEl.innerHTML = `<div class="status-banner info">Parsed ${parsedRows.length} rows. Review below, then import.</div>`;
+        previewWrap.classList.toggle("hidden", parsedRows.length === 0);
+        importBtn.disabled = importable === 0;
+
+        if (importable === 0) {
+          let message = describeNothingToImport(parsedRows);
+          if (parsedRows.length > 0 && parsedRows.every((r) => r.reason === "missing")) {
+            message += ` Columns found in your file: ${(results.meta.fields || []).join(", ") || "(none)"} — it needs a Name column and a TeamID (or Team) column.`;
+          }
+          showError(message);
+        } else {
+          const skipped = parsedRows.length - importable;
+          statusEl.innerHTML = `<div class="status-banner info">${importable} of ${parsedRows.length} row(s) ready to import${skipped ? ` (${skipped} skipped — see Status below)` : ""}. Review, then click Import.</div>`;
+        }
       },
     });
   });
 
-  container.querySelector("#importBtn").addEventListener("click", async () => {
+  importBtn.addEventListener("click", async () => {
     const toImport = parsedRows.filter((r) => r.willImport);
     if (toImport.length === 0) {
-      statusEl.innerHTML = `<div class="status-banner error">Nothing new to import.</div>`;
+      showError(describeNothingToImport(parsedRows));
       return;
     }
 
-    const playersSnap = await getDocs(collection(db, "players"));
-    const existingCodes = new Set();
-    playersSnap.forEach((d) => existingCodes.add(d.data().badgeCode));
+    importBtn.disabled = true;
+    try {
+      const playersSnap = await getDocs(collection(db, "players"));
+      const existingCodes = new Set();
+      playersSnap.forEach((d) => existingCodes.add(d.data().badgeCode));
 
-    let batch = writeBatch(db);
-    let opCount = 0;
-    for (const row of toImport) {
-      const ref = doc(collection(db, "players"));
-      batch.set(ref, {
-        name: row.name,
-        teamId: row.teamId,
-        email: row.email || "",
-        jersey: row.jersey || "",
-        position: row.position || "",
-        badgeCode: genBadgeCode(existingCodes),
-        active: true,
-      });
-      opCount++;
-      if (opCount === 400) {
-        await batch.commit();
-        batch = writeBatch(db);
-        opCount = 0;
+      let batch = writeBatch(db);
+      let opCount = 0;
+      for (const row of toImport) {
+        const ref = doc(collection(db, "players"));
+        batch.set(ref, {
+          name: row.name,
+          teamId: row.teamId,
+          email: row.email || "",
+          jersey: row.jersey || "",
+          position: row.position || "",
+          badgeCode: genBadgeCode(existingCodes),
+          active: true,
+        });
+        opCount++;
+        if (opCount === 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opCount = 0;
+        }
       }
-    }
-    if (opCount > 0) await batch.commit();
+      if (opCount > 0) await batch.commit();
 
-    statusEl.innerHTML = `<div class="status-banner ok">Imported ${toImport.length} players.</div>`;
-    previewWrap.classList.add("hidden");
-    parsedRows = [];
-    container.querySelector("#csvFile").value = "";
-    refreshRosterTable();
+      statusEl.innerHTML = `<div class="status-banner ok">Imported ${toImport.length} players.</div>`;
+      previewWrap.classList.add("hidden");
+      parsedRows = [];
+      refreshRosterTable();
+    } catch (err) {
+      const hint = err.code === "permission-denied" ? " You may have been signed out — reload this page and log in again." : "";
+      showError(`Import failed: ${String(err.message).replace(/\.$/, "")}.${hint}`);
+    } finally {
+      importBtn.disabled = false;
+    }
   });
 
   refreshRosterTable();
