@@ -1,6 +1,7 @@
 import { auth } from "./firebase.js";
 import {
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut,
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -23,6 +24,31 @@ document.getElementById("loginBtn").addEventListener("click", async () => {
     await signInWithEmailAndPassword(auth, email, password);
   } catch (err) {
     loginStatus.innerHTML = `<div class="status-banner error">${err.message}</div>`;
+  }
+});
+
+// Emails a reset link via Firebase. The success message is deliberately the
+// same whether or not the address has an account, so this can't be used to
+// discover which emails are admins.
+document.getElementById("forgotPasswordLink").addEventListener("click", async (e) => {
+  e.preventDefault();
+  const email = document.getElementById("email").value.trim();
+  if (!email) {
+    loginStatus.innerHTML = `<div class="status-banner error">Type your email address in the Email box first, then click "Forgot password?" again.</div>`;
+    return;
+  }
+  try {
+    await sendPasswordResetEmail(auth, email);
+    const safeEmail = email.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    loginStatus.innerHTML = `<div class="status-banner ok">If an account exists for ${safeEmail}, a password reset link is on its way. Check your inbox (and spam folder).</div>`;
+  } catch (err) {
+    const message =
+      err.code === "auth/invalid-email"
+        ? "That doesn't look like a valid email address."
+        : err.code === "auth/too-many-requests"
+        ? "Too many attempts — wait a few minutes and try again."
+        : `Couldn't send the reset email: ${err.message}`;
+    loginStatus.innerHTML = `<div class="status-banner error">${message}</div>`;
   }
 });
 
