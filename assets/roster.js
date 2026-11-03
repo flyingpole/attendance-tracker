@@ -3,6 +3,8 @@ import {
   collection,
   getDocs,
   doc,
+  addDoc,
+  deleteDoc,
   writeBatch,
   updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -67,13 +69,38 @@ export function initRosterTab(container) {
     </div>
 
     <div class="card">
+      <h2 style="margin-top:0;">Add a player</h2>
+      <p style="color:var(--muted); margin-top:-0.5rem;">
+        For a player who joins late — no CSV needed. They get a badge code right away;
+        print their tag from the Badges tab.
+      </p>
+      <div id="addPlayerStatus"></div>
+      <label for="newPlayerName">Name</label>
+      <input id="newPlayerName" type="text" />
+      <label for="newPlayerTeam" style="margin-top:0.75rem;">Team</label>
+      <select id="newPlayerTeam"></select>
+      <label for="newPlayerEmail" style="margin-top:0.75rem;">Email (optional)</label>
+      <input id="newPlayerEmail" type="email" />
+      <label for="newPlayerJersey" style="margin-top:0.75rem;">Jersey (optional)</label>
+      <input id="newPlayerJersey" type="text" />
+      <label for="newPlayerPosition" style="margin-top:0.75rem;">Position (optional)</label>
+      <select id="newPlayerPosition">
+        <option value="">-- none --</option>
+        ${POSITIONS.map((pos) => `<option value="${pos}">${pos}</option>`).join("")}
+      </select>
+      <button id="addPlayerBtn" style="margin-top:1rem;">Add player</button>
+    </div>
+
+    <div class="card">
       <h2 style="margin-top:0;">Current roster</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
         Set or fix a player's position here any time — it's used to auto-detect which
-        positional practice they're attending on the kiosk.
+        positional practice they're attending on the kiosk. Use the Team dropdown to
+        reassign a player, or Delete to remove one who has left the club.
       </p>
+      <div id="rosterListStatus"></div>
       <table>
-        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Position</th></tr></thead>
+        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Position</th><th></th></tr></thead>
         <tbody id="rosterTableBody"></tbody>
       </table>
     </div>
@@ -84,6 +111,15 @@ export function initRosterTab(container) {
   const previewBody = container.querySelector("#previewBody");
   const rosterBody = container.querySelector("#rosterTableBody");
   const teamCodesReference = container.querySelector("#teamCodesReference");
+  const listStatusEl = container.querySelector("#rosterListStatus");
+  const addStatusEl = container.querySelector("#addPlayerStatus");
+  const newPlayerTeam = container.querySelector("#newPlayerTeam");
+
+  function showListStatus(el, kind, message) {
+    el.innerHTML = `<div class="status-banner ${kind}">${escapeHtml(message)}</div>`;
+    // These banners sit above or beside a long list — make sure they're seen.
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 
   let sampleTeamCode = "TEAMCODE";
   container.querySelector("#templateBtn").addEventListener("click", () => downloadTemplate(sampleTeamCode));
@@ -106,6 +142,13 @@ export function initRosterTab(container) {
           .join("<br>")
       : `No teams yet — add one on the Teams tab first.`;
 
+    const previousTeam = newPlayerTeam.value;
+    newPlayerTeam.innerHTML = [...teamNames.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([code, name]) => `<option value="${escapeHtml(code)}">${escapeHtml(name)} (${escapeHtml(code)})</option>`)
+      .join("");
+    if (previousTeam && teamNames.has(previousTeam)) newPlayerTeam.value = previousTeam;
+
     const players = [];
     playersSnap.forEach((d) => players.push({ id: d.id, ...d.data() }));
     players.sort((a, b) => a.name.localeCompare(b.name));
@@ -126,11 +169,12 @@ export function initRosterTab(container) {
         )
         .join("");
       tr.innerHTML = `
-        <td>${p.name}</td>
+        <td>${escapeHtml(p.name)}</td>
         <td><select data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.teamId)}" class="team-select">${teamOptions}</select></td>
-        <td><code>${p.badgeCode}</code></td>
-        <td>${p.email || ""}</td>
+        <td><code>${escapeHtml(p.badgeCode)}</code></td>
+        <td>${escapeHtml(p.email)}</td>
         <td><select data-id="${p.id}" class="position-select">${positionOptions}</select></td>
+        <td><button class="danger delete-player" data-id="${p.id}" data-name="${escapeHtml(p.name)}">Delete</button></td>
       `;
       rosterBody.appendChild(tr);
     }
@@ -151,10 +195,25 @@ export function initRosterTab(container) {
         try {
           await updateDoc(doc(db, "players", sel.dataset.id), { teamId: sel.value });
           sel.dataset.current = sel.value;
-          statusEl.innerHTML = `<div class="status-banner ok">Moved ${escapeHtml(sel.dataset.name)} to ${escapeHtml(label)}. Their badge code is unchanged; reprint their tag if you want it to show the new team.</div>`;
+          showListStatus(listStatusEl, "ok", `Moved ${sel.dataset.name} to ${label}. Their badge code is unchanged; reprint their tag if you want it to show the new team.`);
         } catch (err) {
           sel.value = sel.dataset.current;
-          showError(`Couldn't move ${sel.dataset.name}: ${err.message}`);
+          showListStatus(listStatusEl, "error", `Couldn't move ${sel.dataset.name}: ${err.message}`);
+        }
+      });
+    });
+
+    rosterBody.querySelectorAll(".delete-player").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = btn.dataset.name;
+        if (!confirm(`Delete ${name} from the roster?\n\nTheir badge will stop working at the kiosk. Past attendance records are kept.\n\nThis cannot be undone.`)) return;
+        try {
+          await deleteDoc(doc(db, "players", btn.dataset.id));
+          showListStatus(listStatusEl, "ok", `Deleted ${name}.`);
+          refreshRosterTable();
+        } catch (err) {
+          const hint = err.code === "permission-denied" ? " You may have been signed out — reload this page and log in again." : "";
+          showListStatus(listStatusEl, "error", `Couldn't delete ${name}: ${String(err.message).replace(/\.$/, "")}.${hint}`);
         }
       });
     });
@@ -269,6 +328,53 @@ export function initRosterTab(container) {
       showError(`Import failed: ${String(err.message).replace(/\.$/, "")}.${hint}`);
     } finally {
       importBtn.disabled = false;
+    }
+  });
+
+  container.querySelector("#addPlayerBtn").addEventListener("click", async () => {
+    const nameInput = container.querySelector("#newPlayerName");
+    const emailInput = container.querySelector("#newPlayerEmail");
+    const jerseyInput = container.querySelector("#newPlayerJersey");
+    const positionSelect = container.querySelector("#newPlayerPosition");
+    const name = nameInput.value.trim();
+    const teamId = newPlayerTeam.value;
+
+    if (!name) return showListStatus(addStatusEl, "error", "Enter the player's name.");
+    if (!teamId) return showListStatus(addStatusEl, "error", "Pick a team (add one on the Teams tab first if the list is empty).");
+
+    const addBtn = container.querySelector("#addPlayerBtn");
+    addBtn.disabled = true;
+    try {
+      const playersSnap = await getDocs(collection(db, "players"));
+      const existingCodes = new Set();
+      let duplicate = false;
+      playersSnap.forEach((d) => {
+        existingCodes.add(d.data().badgeCode);
+        if (rosterKey(d.data().teamId, d.data().name) === rosterKey(teamId, name)) duplicate = true;
+      });
+      if (duplicate) return showListStatus(addStatusEl, "error", `${name} is already on that team's roster.`);
+
+      const badgeCode = genBadgeCode(existingCodes);
+      await addDoc(collection(db, "players"), {
+        name,
+        teamId,
+        email: emailInput.value.trim(),
+        jersey: jerseyInput.value.trim(),
+        position: positionSelect.value,
+        badgeCode,
+        active: true,
+      });
+      nameInput.value = "";
+      emailInput.value = "";
+      jerseyInput.value = "";
+      positionSelect.value = "";
+      showListStatus(addStatusEl, "ok", `Added ${name} to ${teamId} with badge code ${badgeCode}. Print their tag from the Badges tab.`);
+      refreshRosterTable();
+    } catch (err) {
+      const hint = err.code === "permission-denied" ? " You may have been signed out — reload this page and log in again." : "";
+      showListStatus(addStatusEl, "error", `Couldn't add ${name}: ${String(err.message).replace(/\.$/, "")}.${hint}`);
+    } finally {
+      addBtn.disabled = false;
     }
   });
 
