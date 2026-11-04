@@ -187,7 +187,9 @@ async function writeSheet({ id, meta, ref }, title, rendered, playerCount) {
   const totalRows = rendered.lastDataRow;
   const range = (r0, r1, c0, c1) => ({ sheetId, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 });
 
-  await google("POST", `${SHEETS}/${id}/values/${encodeURIComponent(TAB)}:clear`, {});
+  // Clear by the tab's current name — a sheet you made by hand is still "Sheet1"
+  // here; the batchUpdate below renames it to TAB.
+  await google("POST", `${SHEETS}/${id}/values/${encodeURIComponent(sheet.properties.title)}:clear`, {});
 
   const requests = [
     { updateSpreadsheetProperties: { properties: { title }, fields: "title" } },
