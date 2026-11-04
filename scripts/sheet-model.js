@@ -139,3 +139,57 @@ export function renderSheetValues(model, { title, updatedLabel, formatDate, form
 
   return { top, data, width, lastDataRow };
 }
+
+// ---------- Director summary ("All Teams" tab) ----------
+
+// Miss % at or above this is highlighted red.
+export const MISS_ALERT = 0.25;
+export const SUMMARY_HEADER_ROW = 2; // 1-based; title is row 1
+
+// Per-player totals for one team's model, in the same order as model.players.
+export function playerTotals(model) {
+  return model.players.map((player, j) => {
+    let attended = 0;
+    let missed = 0;
+    for (const row of model.cells) {
+      if (row[j].kind === "present") attended++;
+      else if (row[j].kind === "missed") missed++;
+    }
+    const total = attended + missed;
+    return { player, attended, missed, total, missPct: total ? missed / total : null };
+  });
+}
+
+// teamResults: [{ team: {name, coachName}, model }]. Returns a grid for the
+// "All Teams" tab: a player table in columns A-F (sortable/filterable) and a
+// per-team overview in columns H-M beside it.
+export function renderAllTeamsValues(teamResults, { updatedLabel }) {
+  const sorted = [...teamResults].sort((a, b) => a.team.name.localeCompare(b.team.name, undefined, { numeric: true }));
+  const playerRows = [];
+  const teamRows = [];
+  for (const { team, model } of sorted) {
+    let attended = 0;
+    let missed = 0;
+    let flagged = 0;
+    for (const t of playerTotals(model)) {
+      attended += t.attended;
+      missed += t.missed;
+      if (t.missPct !== null && t.missPct >= MISS_ALERT) flagged++;
+      playerRows.push([team.name, t.player.name, t.total, t.attended, t.missed, t.missPct ?? ""]);
+    }
+    const all = attended + missed;
+    teamRows.push([team.name, team.coachName || "", model.players.length, model.dateKeys.length, all ? missed / all : "", flagged]);
+  }
+
+  const blank = () => Array(6).fill("");
+  const body = Math.max(playerRows.length, teamRows.length, 1);
+  const rows = [
+    [`All teams — attendance summary (team practices only), updated ${updatedLabel}`, ...Array(12).fill("")],
+    [
+      "Team", "Player", "Total Days", "Days Attended", "Days Missed", "Miss %", "",
+      "Team", "Coach", "Players", "Practices Held", "Team Miss %", `Players ≥${Math.round(MISS_ALERT * 100)}% Missed`,
+    ],
+  ];
+  for (let i = 0; i < body; i++) rows.push([...(playerRows[i] || blank()), "", ...(teamRows[i] || blank())]);
+  return { rows, playerCount: playerRows.length, teamCount: teamRows.length, lastRow: rows.length };
+}

@@ -12,8 +12,16 @@ on:
         description: "Optional override. Leave blank to use the season set on the admin Teams tab."
         default: ""
         required: false
+      build_master:
+        description: "Also build the director's all-teams summary sheet (refreshes every team first, ignoring team_ids)."
+        type: boolean
+        default: false
+      share_with_director:
+        description: "With build_master: give the director (DIRECTOR_EMAIL secret) view access. No email is sent."
+        type: boolean
+        default: true
       share_with_coaches:
-        description: "Give each team's coach view access (Google emails them). Leave unticked to build the sheets quietly first."
+        description: "Give each team's coach view access (no email is sent; use Email to coach on the Teams tab). Leave unticked to build the sheets first."
         type: boolean
         default: false
       sheet_ids:
@@ -39,6 +47,9 @@ jobs:
           TEAM_IDS: ${{ inputs.team_ids }}
           SHEET_IDS: ${{ inputs.sheet_ids }}
           SHARE_WITH_COACHES: ${{ inputs.share_with_coaches }}
+          BUILD_MASTER: ${{ inputs.build_master }}
+          SHARE_WITH_DIRECTOR: ${{ inputs.share_with_director }}
+          DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
           SEASON_LABEL: ${{ inputs.season }}
           SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}
           SHEET_HELPER_SECRET: ${{ secrets.SHEET_HELPER_SECRET }}

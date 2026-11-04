@@ -86,10 +86,18 @@ helper creates each sheet in the director's own Drive; the workflow then fills i
 5. Deploy → New deployment → type **Web app** → Execute as **Me**, Who has access **Anyone** → Deploy. Copy the web app URL.
 6. In the GitHub repo, Settings → Secrets and variables → Actions, add `SHEET_HELPER_URL` (that URL) and `SHEET_HELPER_SECRET` (the same value as `HELPER_SECRET`).
 
-By default the workflow builds the sheets quietly (only the director's account has access).
-Once they look right, run it again with **share_with_coaches** ticked to give each coach
-view-only access; Google emails each coach a "shared with you" notice. If you change
-`apps-script/sheet-helper.gs`, re-paste it and use Deploy → Manage deployments → Edit → New version.
+By default the workflow builds the sheets without giving coaches access. Once they look right,
+run it again with **share_with_coaches** ticked to add each coach as a view-only person. This is
+silent (like unticking "Notify people" in Google's Share dialog), so use **Email to coach** on the
+Teams tab to send them the link. Google only allows silent sharing with Google accounts; a coach
+whose email isn't one (e.g. Yahoo) is reported as "could NOT share" in the run summary.
+
+**Director's summary sheet:** tick **build_master** when running the workflow. It refreshes every
+team's sheet, then builds one spreadsheet named "All Teams Attendance Summary - Florida Conquer
+<season> Season" with an **All Teams** tab (every player on one sortable/filterable table, plus a
+per-team overview) and one tab per team that mirrors that team's sheet. It's shared view-only with
+the address in the `DIRECTOR_EMAIL` secret, silently (untick **share_with_director** to skip). The
+workflow checks that address's mail domain first and skips sharing if it looks mistyped.
 
 Alternatively, create a blank Sheet by hand, share it with the service account (Editor), and
 pass `TEAM=spreadsheetId` in the workflow's `sheet_ids` box. Sheet IDs are remembered in the
