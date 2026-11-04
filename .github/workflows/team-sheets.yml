@@ -1,0 +1,28 @@
+name: Team Attendance Sheets
+
+on:
+  # Manual only for now: Actions tab -> "Team Attendance Sheets" -> Run workflow.
+  workflow_dispatch:
+    inputs:
+      team_ids:
+        description: "Comma-separated team codes to build/refresh (e.g. 16T or 16T,18N)"
+        default: "16T"
+        required: true
+
+jobs:
+  build-sheets:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: node build-team-sheets.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
+          TEAM_IDS: ${{ inputs.team_ids }}
+          REPORT_TIMEZONE: "America/New_York"
