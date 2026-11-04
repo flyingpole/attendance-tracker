@@ -9,9 +9,9 @@ on:
         default: "16T"
         required: true
       season:
-        description: "Season shown in each sheet's name, e.g. 2026-2027 gives '16 Teal Attendance - Florida Conquer 2026-2027 Season'"
-        default: "2026-2027"
-        required: true
+        description: "Optional override. Leave blank to use the season set on the admin Teams tab."
+        default: ""
+        required: false
       share_with_coaches:
         description: "Give each team's coach view access (Google emails them). Leave unticked to build the sheets quietly first."
         type: boolean

@@ -20,7 +20,10 @@ import {
 
 const TZ = process.env.REPORT_TIMEZONE || "America/New_York";
 const TAB = "Attendance";
-const SEASON = (process.env.SEASON_LABEL || "2026-2027").trim();
+// Season in each sheet's name. Normally read from Firestore (settings/season,
+// edited on the admin Teams tab); the SEASON_LABEL env var overrides it.
+let SEASON = (process.env.SEASON_LABEL || "").trim();
+const DEFAULT_SEASON = "2026-2027";
 const TEAM_IDS = (process.env.TEAM_IDS || "16T").split(",").map((s) => s.trim()).filter(Boolean);
 // Comma-separated emails that get edit access to every team sheet (optional).
 const EDITOR_EMAILS = (process.env.SHARE_EDITORS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -396,6 +399,11 @@ async function preflight() {
 
 async function main() {
   await preflight();
+  if (!SEASON) {
+    const seasonDoc = await db.collection("settings").doc("season").get();
+    SEASON = (seasonDoc.exists && String(seasonDoc.data().label || "").trim()) || DEFAULT_SEASON;
+  }
+  console.log(`Season: ${SEASON}`);
   const now = new Date();
   const [scheduleSnap, cancelSnap] = await Promise.all([db.collection("schedule").get(), db.collection("scheduleCancellations").get()]);
   const scheduleEntries = scheduleSnap.docs.map((d) => ({ id: d.id, ...d.data() }));

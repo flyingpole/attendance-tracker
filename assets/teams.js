@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   updateDoc,
   getDocs,
   query,
@@ -25,6 +26,19 @@ async function deleteRefs(db, refs) {
 
 export function initTeamsTab(container) {
   container.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0;">Season</h2>
+      <p style="color:var(--muted); margin-top:-0.5rem;">
+        Shown in the name of each team's attendance sheet (e.g. "16 Teal Attendance - Florida
+        Conquer <strong id="seasonPreview"></strong> Season"). Change it when a new season
+        starts, then re-run the Team Attendance Sheets workflow to rename the sheets.
+      </p>
+      <div id="seasonStatus"></div>
+      <label for="seasonLabel">Season label</label>
+      <input id="seasonLabel" type="text" placeholder="2026-2027" />
+      <button id="saveSeasonBtn" style="margin-top:1rem;">Save season</button>
+    </div>
+
     <div class="card">
       <h2 style="margin-top:0;">Add / edit a team</h2>
       <div id="teamStatus"></div>
@@ -61,6 +75,37 @@ export function initTeamsTab(container) {
 
   let editingExisting = false;
   let allTeams = [];
+
+  // Season label lives in Firestore (settings/season) so the nightly/sheet jobs
+  // can read it; changing it here is all that's needed to start a new season.
+  const seasonInput = container.querySelector("#seasonLabel");
+  const seasonStatus = container.querySelector("#seasonStatus");
+  const seasonPreview = container.querySelector("#seasonPreview");
+  const updateSeasonPreview = () => (seasonPreview.textContent = seasonInput.value.trim() || "2026-2027");
+  seasonInput.addEventListener("input", updateSeasonPreview);
+  updateSeasonPreview();
+
+  getDoc(doc(db, "settings", "season"))
+    .then((snap) => {
+      if (snap.exists() && snap.data().label) seasonInput.value = snap.data().label;
+      updateSeasonPreview();
+    })
+    .catch((err) => console.warn("Couldn't load season setting:", err.message));
+
+  container.querySelector("#saveSeasonBtn").addEventListener("click", async () => {
+    const label = seasonInput.value.trim();
+    if (!label) {
+      seasonStatus.innerHTML = `<div class="status-banner error">Enter a season label, e.g. 2026-2027.</div>`;
+      return;
+    }
+    try {
+      await setDoc(doc(db, "settings", "season"), { label });
+      seasonStatus.innerHTML = `<div class="status-banner ok">Season saved as "${escapeHtml(label)}". Re-run Team Attendance Sheets to rename the sheets.</div>`;
+    } catch (err) {
+      const hint = err.code === "permission-denied" ? " Publish the latest firestore.rules in the Firebase console, or log in again." : "";
+      seasonStatus.innerHTML = `<div class="status-banner error">Couldn't save the season: ${escapeHtml(String(err.message).replace(/\.$/, ""))}.${hint}</div>`;
+    }
+  });
 
   function showStatus(kind, message) {
     statusEl.innerHTML = `<div class="status-banner ${kind}">${escapeHtml(message)}</div>`;
