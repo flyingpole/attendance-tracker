@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       team_ids:
-        description: "Comma-separated team codes to build/refresh (e.g. 16T or 16T,18N)"
+        description: "Comma-separated team codes to build/refresh (e.g. 16T or 16T,18S), or ALL for every team"
         default: "16T"
         required: true
       sheet_ids:
@@ -30,4 +30,6 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
           TEAM_IDS: ${{ inputs.team_ids }}
           SHEET_IDS: ${{ inputs.sheet_ids }}
+          SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}
+          SHEET_HELPER_SECRET: ${{ secrets.SHEET_HELPER_SECRET }}
           REPORT_TIMEZONE: "America/New_York"

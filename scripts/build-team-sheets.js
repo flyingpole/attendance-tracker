@@ -135,7 +135,36 @@ const PROVIDED_SHEET_IDS = new Map(
     .filter(([team, id]) => team && id)
 );
 
-async function ensureSpreadsheet(teamId, title) {
+// Robot accounts have no Drive storage, so new sheets are created by the Apps
+// Script helper (apps-script/sheet-helper.gs) inside the director's own Drive.
+const HELPER_URL = process.env.SHEET_HELPER_URL;
+const HELPER_SECRET = process.env.SHEET_HELPER_SECRET;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callHelper(payload) {
+  const res = await fetch(HELPER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ ...payload, secret: HELPER_SECRET }),
+    redirect: "follow",
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Sheet helper returned something other than JSON (HTTP ${res.status}). Check that the web app is deployed with "Who has access: Anyone". Starts with: ${text.slice(0, 200)}`
+    );
+  }
+  if (!data.ok) throw new Error(`Sheet helper refused the request: ${data.error}`);
+  return data;
+}
+
+const SHEET_META_FIELDS = "spreadsheetId,sheets(properties(sheetId,title),conditionalFormats)";
+
+async function ensureSpreadsheet(teamId, title, coachEmail) {
   const ref = db.collection("reportSheets").doc(teamId);
   const provided = PROVIDED_SHEET_IDS.get(teamId);
   if (provided) {
@@ -160,23 +189,37 @@ async function ensureSpreadsheet(teamId, title) {
       console.warn(`Saved sheet for ${teamId} is no longer reachable (${err.status}); creating a new one.`);
     }
   }
-  let created;
-  try {
-    created = await google("POST", SHEETS, {
-      properties: { title },
-      sheets: [{ properties: { title: TAB } }],
-    });
-  } catch (err) {
-    if (err.status === 403) {
-      err.message +=
-        `\n\nThe service account was not allowed to create a spreadsheet. Workaround: create a blank Google Sheet yourself,` +
-        ` share it with ${serviceAccount.client_email} as Editor, and re-run with sheet_ids set to ${teamId}=<the ID from its URL>.`;
-    }
-    throw err;
+  if (!HELPER_URL || !HELPER_SECRET) {
+    throw new Error(
+      `No sheet exists for ${teamId} yet, and the sheet helper isn't configured (SHEET_HELPER_URL / SHEET_HELPER_SECRET secrets). ` +
+        `Either set up the helper (see README), or create a blank Google Sheet yourself, share it with ${serviceAccount.client_email} as Editor, ` +
+        `and re-run with sheet_ids set to ${teamId}=<the ID from its URL>.`
+    );
   }
-  const meta = await google("GET", `${SHEETS}/${created.spreadsheetId}?fields=spreadsheetId,sheets(properties(sheetId,title),conditionalFormats)`);
-  await ref.set({ spreadsheetId: created.spreadsheetId, url: created.spreadsheetUrl, createdAt: new Date() });
-  return { id: created.spreadsheetId, meta, created: true, ref };
+
+  const made = await callHelper({
+    action: "createSheet",
+    title,
+    editors: [serviceAccount.client_email],
+    viewers: coachEmail ? [coachEmail.trim()] : [],
+  });
+  // Save the ID before anything else can fail, so a re-run reuses this sheet
+  // instead of creating a duplicate.
+  await ref.set({ spreadsheetId: made.spreadsheetId, url: made.url, createdAt: new Date(), providedBy: "helper" });
+  if (made.shareErrors?.length) console.warn(`  helper could not share with: ${made.shareErrors.join("; ")}`);
+
+  // The new file can take a few seconds to become visible to the service account.
+  let meta;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      meta = await google("GET", `${SHEETS}/${made.spreadsheetId}?fields=${SHEET_META_FIELDS}`);
+      break;
+    } catch (err) {
+      if (attempt >= 6 || (err.status !== 404 && err.status !== 403)) throw err;
+      await sleep(3000);
+    }
+  }
+  return { id: made.spreadsheetId, meta, created: true, ref };
 }
 
 async function writeSheet({ id, meta, ref }, title, rendered, playerCount) {
@@ -358,13 +401,23 @@ async function main() {
   const summaryLines = [];
   let failed = 0;
 
-  for (const teamId of TEAM_IDS) {
+  let teamIds = TEAM_IDS;
+  const doAll = teamIds.length === 1 && teamIds[0].toUpperCase() === "ALL";
+  if (doAll) teamIds = (await db.collection("teams").get()).docs.map((d) => d.id).sort();
+
+  for (const [index, teamId] of teamIds.entries()) {
+    if (index > 0) await sleep(1500); // stay under the Sheets API per-minute write limit
     try {
       console.log(`Team ${teamId}`);
       const { team, model } = await loadTeamData(teamId, scheduleEntries, cancellations, now);
+      if (doAll && model.players.length === 0) {
+        console.log("  no players on this team — skipped");
+        summaryLines.push(`- **${team.name}** (${teamId}): skipped, no players`);
+        continue;
+      }
       const title = `Florida Conquer — ${team.name} Attendance`;
       const rendered = renderSheetValues(model, { title: team.name, updatedLabel, formatDate, formatTime });
-      const sheet = await ensureSpreadsheet(teamId, title);
+      const sheet = await ensureSpreadsheet(teamId, title, team.coachEmail);
       await writeSheet(sheet, title, rendered, model.players.length);
 
       const wanted = new Map();

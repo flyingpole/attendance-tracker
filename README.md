@@ -70,7 +70,27 @@ You can also trigger it manually any time from the **Actions** tab (`workflow_di
 > Note: GitHub auto-disables scheduled workflows after 60 days with no repo activity.
 > If your emails stop, re-enable the workflow under the **Actions** tab.
 
-### 6. Locking down the lobby PC (true kiosk mode)
+### 6. Team attendance Google Sheets
+
+The **Team Attendance Sheets** workflow (Actions tab → Run workflow) writes one Google Sheet per
+team: players across the top, one row per team-practice date, and Total Days / Days Attended /
+Days Missed / Miss % at the top. Enter a team code (or `ALL`) as `team_ids`.
+
+Robot (service) accounts have no Drive storage, so they can't create files. A small Apps Script
+helper creates each sheet in the director's own Drive; the workflow then fills it in.
+
+1. Enable the **Google Sheets API** and **Google Drive API** for the Firebase project.
+2. Go to <https://script.google.com> → New project → paste in [`apps-script/sheet-helper.gs`](apps-script/sheet-helper.gs).
+3. Project Settings (gear) → Script properties → add `HELPER_SECRET` with a long random value.
+4. Select the `setup` function and click Run; approve the Drive permission prompts.
+5. Deploy → New deployment → type **Web app** → Execute as **Me**, Who has access **Anyone** → Deploy. Copy the web app URL.
+6. In the GitHub repo, Settings → Secrets and variables → Actions, add `SHEET_HELPER_URL` (that URL) and `SHEET_HELPER_SECRET` (the same value as `HELPER_SECRET`).
+
+Alternatively, create a blank Sheet by hand, share it with the service account (Editor), and
+pass `TEAM=spreadsheetId` in the workflow's `sheet_ids` box. Sheet IDs are remembered in the
+Firestore `reportSheets` collection, so later runs update the same sheet.
+
+### 7. Locking down the lobby PC (true kiosk mode)
 
 A web page cannot block someone from closing the window, opening a new tab, or
 navigating away — browsers intentionally don't let sites override that. The
@@ -97,6 +117,10 @@ flag above. This prevents access to the desktop, taskbar, and other apps
 entirely — the PC boots straight into the scan-in screen.
 
 ## Day-to-day use
+
+If the scanner is down or players weren't scanned, enter attendance afterward under
+**Admin → Manual Attendance** (pick the date and practice, tick who attended, set arrival times).
+This needs the latest `firestore.rules` published in the Firebase console.
 
 1. **Add teams** (Admin → Teams): a short team code, name, coach name, and coach email.
 2. **Import rosters** (Admin → Roster Import): download the CSV template, fill in

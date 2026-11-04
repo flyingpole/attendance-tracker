@@ -8,6 +8,7 @@ import {
 import { initTeamsTab } from "./teams.js";
 import { initRosterTab } from "./roster.js";
 import { initSessionsTab } from "./sessions.js";
+import { initManualAttendanceTab } from "./attendance-manual.js";
 import { initScheduleTab } from "./schedule.js";
 import { initBadgesTab } from "./badges.js";
 
@@ -58,6 +59,7 @@ const tabInitializers = {
   teams: () => initTeamsTab(document.getElementById("tab-teams")),
   roster: () => initRosterTab(document.getElementById("tab-roster")),
   schedule: () => initScheduleTab(document.getElementById("tab-schedule")),
+  manual: () => initManualAttendanceTab(document.getElementById("tab-manual")),
   sessions: () => initSessionsTab(document.getElementById("tab-sessions")),
   badges: () => initBadgesTab(document.getElementById("tab-badges")),
 };
