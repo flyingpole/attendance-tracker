@@ -46,7 +46,7 @@ export function initTeamsTab(container) {
       <h2 style="margin-top:0;">Teams</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">Click a team to see its roster and coach.</p>
       <table>
-        <thead><tr><th></th><th>Code</th><th>Name</th><th>Coach</th><th>Coach email</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Code</th><th>Name</th><th>Coach</th><th>Coach email</th><th>Attendance sheet</th><th></th></tr></thead>
         <tbody id="teamsTableBody"></tbody>
       </table>
     </div>
@@ -93,7 +93,7 @@ export function initTeamsTab(container) {
     const detailTr = document.createElement("tr");
     detailTr.className = "roster-detail";
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.innerHTML = `<div style="padding:0.5rem 0.25rem; color:var(--muted);">Loading roster…</div>`;
     detailTr.appendChild(td);
     tr.after(detailTr);
@@ -168,16 +168,38 @@ export function initTeamsTab(container) {
     teams.sort((a, b) => a.id.localeCompare(b.id));
     allTeams = teams;
 
+    // Sheet links are written by the Team Attendance Sheets workflow. If the
+    // rules that allow reading them aren't published yet, just show no links.
+    const sheetUrls = new Map();
+    try {
+      const sheetsSnap = await getDocs(collection(db, "reportSheets"));
+      sheetsSnap.forEach((d) => {
+        const id = d.data().spreadsheetId;
+        if (id) sheetUrls.set(d.id, `https://docs.google.com/spreadsheets/d/${id}/edit`);
+      });
+    } catch (err) {
+      console.warn("Couldn't load attendance sheet links:", err.message);
+    }
+
     tbody.innerHTML = "";
     for (const t of teams) {
       const tr = document.createElement("tr");
       tr.className = "team-row";
+      const sheetUrl = sheetUrls.get(t.id);
+      const sheetCell = sheetUrl
+        ? `<a href="${escapeHtml(sheetUrl)}" target="_blank" rel="noopener">Open sheet</a>
+           <div style="margin-top:0.35rem; display:flex; gap:0.35rem; flex-wrap:wrap;">
+             <button data-action="copy-sheet" data-url="${escapeHtml(sheetUrl)}" class="secondary">Copy link</button>
+             <button data-action="email-sheet" data-id="${escapeHtml(t.id)}" data-url="${escapeHtml(sheetUrl)}" class="secondary" ${t.coachEmail ? "" : 'disabled title="No coach email on file"'}>Email to coach</button>
+           </div>`
+        : `<span style="color:var(--muted);">Not created yet</span>`;
       tr.innerHTML = `
         <td class="expand-arrow">▸</td>
-        <td>${t.id}</td>
-        <td>${t.name || ""}</td>
-        <td>${t.coachName || ""}</td>
-        <td>${t.coachEmail || ""}</td>
+        <td>${escapeHtml(t.id)}</td>
+        <td>${escapeHtml(t.name)}</td>
+        <td>${escapeHtml(t.coachName)}</td>
+        <td>${escapeHtml(t.coachEmail)}</td>
+        <td>${sheetCell}</td>
         <td>
           <button data-action="edit" data-id="${t.id}" class="secondary">Edit</button>
           <button data-action="delete" data-id="${t.id}" class="danger">Delete</button>
@@ -186,10 +208,41 @@ export function initTeamsTab(container) {
       tbody.appendChild(tr);
 
       tr.addEventListener("click", (e) => {
-        if (e.target.closest("button")) return;
+        if (e.target.closest("button, a")) return;
         toggleRoster(tr, t);
       });
     }
+
+    tbody.querySelectorAll('button[data-action="copy-sheet"]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.url);
+          btn.textContent = "Copied!";
+        } catch {
+          window.prompt("Copy this link:", btn.dataset.url);
+          return;
+        }
+        setTimeout(() => (btn.textContent = "Copy link"), 1500);
+      });
+    });
+
+    // Opens a ready-to-send Gmail draft addressed to the coach; the director
+    // reviews it and clicks Send, so it goes out from their own account.
+    tbody.querySelectorAll('button[data-action="email-sheet"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const t = teams.find((x) => x.id === btn.dataset.id);
+        const subject = `${t.name} attendance sheet`;
+        const greeting = t.coachName ? `Hi ${t.coachName.split(" ")[0]},` : "Hi,";
+        const body =
+          `${greeting}\n\nHere is the attendance sheet for ${t.name}:\n${btn.dataset.url}\n\n` +
+          `It shows each player's attendance at team practices, with total days, days missed and miss % at the top. ` +
+          `It updates automatically each morning. It's view-only; open it while signed in to ${t.coachEmail}.`;
+        const url =
+          "https://mail.google.com/mail/?view=cm&fs=1" +
+          `&to=${encodeURIComponent(t.coachEmail)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        window.open(url, "_blank", "noopener");
+      });
+    });
 
     tbody.querySelectorAll('button[data-action="edit"]').forEach((btn) => {
       btn.addEventListener("click", () => {
