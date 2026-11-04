@@ -139,6 +139,9 @@ const PROVIDED_SHEET_IDS = new Map(
 // Script helper (apps-script/sheet-helper.gs) inside the director's own Drive.
 const HELPER_URL = process.env.SHEET_HELPER_URL;
 const HELPER_SECRET = process.env.SHEET_HELPER_SECRET;
+// Off by default: coaches get access (and Google's "shared with you" email) only
+// when the workflow is run with share_with_coaches ticked.
+const SHARE_WITH_COACHES = /^true$/i.test(process.env.SHARE_WITH_COACHES || "");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -201,7 +204,7 @@ async function ensureSpreadsheet(teamId, title, coachEmail) {
     action: "createSheet",
     title,
     editors: [serviceAccount.client_email],
-    viewers: coachEmail ? [coachEmail.trim()] : [],
+    viewers: SHARE_WITH_COACHES && coachEmail ? [coachEmail.trim()] : [],
   });
   // Save the ID before anything else can fail, so a re-run reuses this sheet
   // instead of creating a duplicate.
@@ -420,14 +423,28 @@ async function main() {
       const sheet = await ensureSpreadsheet(teamId, title, team.coachEmail);
       await writeSheet(sheet, title, rendered, model.players.length);
 
+      // Coaches are only given access (and emailed by Google) when the run is
+      // started with share_with_coaches on, so sheets can be reviewed first.
       const wanted = new Map();
-      if (team.coachEmail) wanted.set(team.coachEmail.trim().toLowerCase(), "reader");
       for (const e of EDITOR_EMAILS) wanted.set(e, "writer");
-      await ensureShared(sheet.id, wanted);
+      let sharing = "not shared with coach yet";
+      if (SHARE_WITH_COACHES) {
+        if (!team.coachEmail) {
+          sharing = "no coach email on file";
+        } else if (HELPER_URL && HELPER_SECRET) {
+          // The sheet's owner (the director's account) does the sharing.
+          const result = await callHelper({ action: "share", spreadsheetId: sheet.id, viewers: [team.coachEmail.trim()] });
+          sharing = result.shareErrors?.length ? `could not share: ${result.shareErrors.join("; ")}` : "shared with coach";
+        } else {
+          wanted.set(team.coachEmail.trim().toLowerCase(), "reader");
+          sharing = "shared with coach";
+        }
+      }
+      if (wanted.size) await ensureShared(sheet.id, wanted);
 
       const url = `https://docs.google.com/spreadsheets/d/${sheet.id}/edit`;
-      console.log(`  ${model.players.length} players, ${model.dateKeys.length} practice dates -> ${url}${sheet.created ? " (created)" : ""}`);
-      summaryLines.push(`- **${team.name}** (${teamId}): ${model.players.length} players, ${model.dateKeys.length} practice dates — [open sheet](${url})`);
+      console.log(`  ${model.players.length} players, ${model.dateKeys.length} practice dates -> ${url}${sheet.created ? " (created)" : ""} [${sharing}]`);
+      summaryLines.push(`- **${team.name}** (${teamId}): ${model.players.length} players, ${model.dateKeys.length} practice dates, ${sharing} — [open sheet](${url})`);
     } catch (err) {
       failed++;
       console.error(`Team ${teamId} failed: ${err.message}`);

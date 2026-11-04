@@ -86,6 +86,11 @@ helper creates each sheet in the director's own Drive; the workflow then fills i
 5. Deploy → New deployment → type **Web app** → Execute as **Me**, Who has access **Anyone** → Deploy. Copy the web app URL.
 6. In the GitHub repo, Settings → Secrets and variables → Actions, add `SHEET_HELPER_URL` (that URL) and `SHEET_HELPER_SECRET` (the same value as `HELPER_SECRET`).
 
+By default the workflow builds the sheets quietly (only the director's account has access).
+Once they look right, run it again with **share_with_coaches** ticked to give each coach
+view-only access; Google emails each coach a "shared with you" notice. If you change
+`apps-script/sheet-helper.gs`, re-paste it and use Deploy → Manage deployments → Edit → New version.
+
 Alternatively, create a blank Sheet by hand, share it with the service account (Editor), and
 pass `TEAM=spreadsheetId` in the workflow's `sheet_ids` box. Sheet IDs are remembered in the
 Firestore `reportSheets` collection, so later runs update the same sheet.
