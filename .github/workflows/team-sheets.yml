@@ -49,6 +49,8 @@ jobs:
         working-directory: scripts
     steps:
       - id: gate
+        # Runs before checkout, so the job-wide "scripts" folder doesn't exist yet.
+        working-directory: ${{ github.workspace }}
         run: |
           # Run in the 2 AM Eastern hour. The one exception is the spring night the
           # clocks jump from 2 AM to 3 AM: there is no 2 AM, so run at 3 AM, which is
