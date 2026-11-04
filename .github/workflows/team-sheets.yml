@@ -1,7 +1,14 @@
 name: Team Attendance Sheets
 
 on:
-  # Manual only for now: Actions tab -> "Team Attendance Sheets" -> Run workflow.
+  # Nightly at 2 AM US Eastern (see daily-report.yml for why there are two
+  # entries and a gate step). Scheduled runs rebuild every team's sheet and the
+  # director's summary, and keep the coach/director access up to date (silently).
+  schedule:
+    - cron: "17 6 * * *"
+    - cron: "17 7 * * *"
+  # Manual: Actions tab -> "Team Attendance Sheets" -> Run workflow (or the
+  # Reports tab in the admin console).
   workflow_dispatch:
     inputs:
       team_ids:
@@ -29,6 +36,11 @@ on:
         default: ""
         required: false
 
+# Never run two at once (e.g. a scheduled run and a button press).
+concurrency:
+  group: team-sheets
+  cancel-in-progress: false
+
 jobs:
   build-sheets:
     runs-on: ubuntu-latest
@@ -36,19 +48,37 @@ jobs:
       run:
         working-directory: scripts
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - id: gate
+        run: |
+          # Run in the 2 AM Eastern hour. The one exception is the spring night the
+          # clocks jump from 2 AM to 3 AM: there is no 2 AM, so run at 3 AM, which is
+          # recognizable because an hour earlier it was still 1 AM.
+          HOUR=$(TZ=America/New_York date +%H)
+          PREV=$(TZ=America/New_York date -d '1 hour ago' +%H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$HOUR" != "02" ] && { [ "$HOUR" != "03" ] || [ "$PREV" != "01" ]; }; then
+            echo "Not the 2 AM Eastern hour ($(TZ=America/New_York date)); skipping this duplicate trigger."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install
-      - run: node build-team-sheets.js
+      - if: steps.gate.outputs.run == 'true'
+        run: npm install
+      - if: steps.gate.outputs.run == 'true'
+        run: node build-team-sheets.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
-          TEAM_IDS: ${{ inputs.team_ids }}
+          # Scheduled runs have no inputs, so they default to everything.
+          TEAM_IDS: ${{ inputs.team_ids || 'ALL' }}
           SHEET_IDS: ${{ inputs.sheet_ids }}
-          SHARE_WITH_COACHES: ${{ inputs.share_with_coaches }}
-          BUILD_MASTER: ${{ inputs.build_master }}
-          SHARE_WITH_DIRECTOR: ${{ inputs.share_with_director }}
+          SHARE_WITH_COACHES: ${{ github.event_name == 'schedule' || inputs.share_with_coaches }}
+          BUILD_MASTER: ${{ github.event_name == 'schedule' || inputs.build_master }}
+          SHARE_WITH_DIRECTOR: ${{ github.event_name == 'schedule' || inputs.share_with_director }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
           SEASON_LABEL: ${{ inputs.season }}
           SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}

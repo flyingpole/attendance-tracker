@@ -9,6 +9,7 @@ import { initTeamsTab } from "./teams.js";
 import { initRosterTab } from "./roster.js";
 import { initSessionsTab } from "./sessions.js";
 import { initManualAttendanceTab } from "./attendance-manual.js";
+import { initReportsTab } from "./reports.js";
 import { initScheduleTab } from "./schedule.js";
 import { initBadgesTab } from "./badges.js";
 
@@ -62,6 +63,7 @@ const tabInitializers = {
   manual: () => initManualAttendanceTab(document.getElementById("tab-manual")),
   sessions: () => initSessionsTab(document.getElementById("tab-sessions")),
   badges: () => initBadgesTab(document.getElementById("tab-badges")),
+  reports: () => initReportsTab(document.getElementById("tab-reports")),
 };
 
 let listenersWired = false;

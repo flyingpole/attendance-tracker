@@ -63,12 +63,37 @@ swap the `nodemailer` transport in `scripts/send-daily-report.js` for their SDK.
 
 ### 5. Nightly report timing
 
-Edit the cron line in [`.github/workflows/daily-report.yml`](.github/workflows/daily-report.yml)
-if 11:00 UTC (~6–7am US Eastern) doesn't suit you — GitHub Actions cron is always UTC.
-You can also trigger it manually any time from the **Actions** tab (`workflow_dispatch`).
+Both nightly jobs — the email report ([`daily-report.yml`](.github/workflows/daily-report.yml))
+and the Google Sheets rebuild ([`team-sheets.yml`](.github/workflows/team-sheets.yml)) — run at
+**2:00 AM US Eastern**. GitHub cron is UTC only, so each workflow lists two triggers (06:17 and
+07:17 UTC) and a "gate" step lets only the one that lands in the 2 AM Eastern hour do the work
+(the other finishes in seconds and shows as "Skipped (duplicate trigger)"). This keeps the time
+right across daylight saving. The odd minute (:17) avoids GitHub's top-of-the-hour rush.
+GitHub doesn't guarantee an exact start time, but at 2 AM runs normally begin within minutes.
+Scheduled sheet rebuilds also keep the coach/director sharing up to date (silently).
+
+You can re-run either job any time from the **Reports** tab in the admin console (see
+"Run buttons" below) or from the **Actions** tab on GitHub (`workflow_dispatch`).
 
 > Note: GitHub auto-disables scheduled workflows after 60 days with no repo activity.
 > If your emails stop, re-enable the workflow under the **Actions** tab.
+
+### Run buttons (Reports tab)
+
+The admin console's **Reports** tab starts the two jobs without opening GitHub. The site is
+public, so it can't hold a GitHub key; instead it asks the Apps Script helper
+([`apps-script/sheet-helper.gs`](apps-script/sheet-helper.gs)), which checks the caller's Firebase
+login and then starts the workflow. One-time setup:
+
+1. Create a fine-grained GitHub token: GitHub → Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens → Generate. Repository access: **Only select repositories** →
+   `attendance-tracker`. Permissions → Repository → **Actions: Read and write**. Choose the longest
+   expiration (renew it when it expires; the Reports buttons then say the token is expired).
+2. In the Apps Script project → Project Settings → Script properties, add `GITHUB_TOKEN` (that
+   token) and `FIREBASE_API_KEY` (the `apiKey` value from `assets/firebase-config.js`).
+3. Re-paste the latest `sheet-helper.gs`, then Deploy → Manage deployments → Edit → New version.
+4. In the admin console → Reports → Setup, paste the helper's web app address (the same URL as
+   the `SHEET_HELPER_URL` secret) and click Save address.
 
 ### 6. Team attendance Google Sheets
 
