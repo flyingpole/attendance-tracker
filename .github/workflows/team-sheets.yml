@@ -8,6 +8,10 @@ on:
         description: "Comma-separated team codes to build/refresh (e.g. 16T or 16T,18N)"
         default: "16T"
         required: true
+      sheet_ids:
+        description: "Optional: use sheets you created yourself, as TEAM=spreadsheetId (e.g. 16T=1AbC...). Share each with the service account as Editor."
+        default: ""
+        required: false
 
 jobs:
   build-sheets:
@@ -25,4 +29,5 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
           TEAM_IDS: ${{ inputs.team_ids }}
+          SHEET_IDS: ${{ inputs.sheet_ids }}
           REPORT_TIMEZONE: "America/New_York"

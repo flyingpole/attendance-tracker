@@ -125,8 +125,31 @@ const rgb = (hex) => ({
   blue: parseInt(hex.slice(5, 7), 16) / 255,
 });
 
+// Optional "TEAM=spreadsheetId" pairs for sheets you created yourself and shared
+// with the service account as Editor (so you own them, and the robot never has
+// to create files).
+const PROVIDED_SHEET_IDS = new Map(
+  (process.env.SHEET_IDS || "")
+    .split(",")
+    .map((pair) => pair.split("=").map((s) => s.trim()))
+    .filter(([team, id]) => team && id)
+);
+
 async function ensureSpreadsheet(teamId, title) {
   const ref = db.collection("reportSheets").doc(teamId);
+  const provided = PROVIDED_SHEET_IDS.get(teamId);
+  if (provided) {
+    try {
+      const meta = await google("GET", `${SHEETS}/${provided}?fields=spreadsheetId,sheets(properties(sheetId,title),conditionalFormats)`);
+      await ref.set({ spreadsheetId: provided, url: `https://docs.google.com/spreadsheets/d/${provided}/edit`, providedBy: "SHEET_IDS" }, { merge: true });
+      return { id: provided, meta, created: false, ref };
+    } catch (err) {
+      throw new Error(
+        `Can't open the sheet you provided for ${teamId} (${provided}): ${err.message}\n` +
+          `Open that Google Sheet, click Share, add ${serviceAccount.client_email} as an Editor, and re-run.`
+      );
+    }
+  }
   const existing = (await ref.get()).data();
   if (existing?.spreadsheetId) {
     try {
@@ -137,10 +160,20 @@ async function ensureSpreadsheet(teamId, title) {
       console.warn(`Saved sheet for ${teamId} is no longer reachable (${err.status}); creating a new one.`);
     }
   }
-  const created = await google("POST", SHEETS, {
-    properties: { title },
-    sheets: [{ properties: { title: TAB } }],
-  });
+  let created;
+  try {
+    created = await google("POST", SHEETS, {
+      properties: { title },
+      sheets: [{ properties: { title: TAB } }],
+    });
+  } catch (err) {
+    if (err.status === 403) {
+      err.message +=
+        `\n\nThe service account was not allowed to create a spreadsheet. Workaround: create a blank Google Sheet yourself,` +
+        ` share it with ${serviceAccount.client_email} as Editor, and re-run with sheet_ids set to ${teamId}=<the ID from its URL>.`;
+    }
+    throw err;
+  }
   const meta = await google("GET", `${SHEETS}/${created.spreadsheetId}?fields=spreadsheetId,sheets(properties(sheetId,title),conditionalFormats)`);
   await ref.set({ spreadsheetId: created.spreadsheetId, url: created.spreadsheetUrl, createdAt: new Date() });
   return { id: created.spreadsheetId, meta, created: true, ref };
@@ -297,7 +330,23 @@ function explainApiError(err) {
   }
 }
 
+// Prints who the robot is and whether Drive responds, so a permission error
+// can be traced without guessing. Never fails the run.
+async function preflight() {
+  console.log(`Service account: ${serviceAccount.client_email} (project ${serviceAccount.project_id})`);
+  try {
+    const about = await google("GET", "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress),storageQuota(limit,usage)");
+    console.log(`Drive API: OK (storage used ${about.storageQuota?.usage ?? "?"} of ${about.storageQuota?.limit ?? "unlimited/unknown"} bytes)`);
+  } catch (err) {
+    console.warn(`Drive API check failed: ${err.message.slice(0, 400)}`);
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Service account to share sheets with (Editor): \`${serviceAccount.client_email}\`\n\n`);
+  }
+}
+
 async function main() {
+  await preflight();
   const now = new Date();
   const [scheduleSnap, cancelSnap] = await Promise.all([db.collection("schedule").get(), db.collection("scheduleCancellations").get()]);
   const scheduleEntries = scheduleSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
