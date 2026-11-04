@@ -20,6 +20,7 @@ import {
 
 const TZ = process.env.REPORT_TIMEZONE || "America/New_York";
 const TAB = "Attendance";
+const SEASON = (process.env.SEASON_LABEL || "2026-2027").trim();
 const TEAM_IDS = (process.env.TEAM_IDS || "16T").split(",").map((s) => s.trim()).filter(Boolean);
 // Comma-separated emails that get edit access to every team sheet (optional).
 const EDITOR_EMAILS = (process.env.SHARE_EDITORS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -418,7 +419,8 @@ async function main() {
         summaryLines.push(`- **${team.name}** (${teamId}): skipped, no players`);
         continue;
       }
-      const title = `Florida Conquer — ${team.name} Attendance`;
+      // Team name first so it's visible in Google's truncated "Open" list.
+      const title = `${team.name} Attendance - Florida Conquer ${SEASON} Season`;
       const rendered = renderSheetValues(model, { title: team.name, updatedLabel, formatDate, formatTime });
       const sheet = await ensureSpreadsheet(teamId, title, team.coachEmail);
       await writeSheet(sheet, title, rendered, model.players.length);

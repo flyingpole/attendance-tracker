@@ -8,6 +8,10 @@ on:
         description: "Comma-separated team codes to build/refresh (e.g. 16T or 16T,18S), or ALL for every team"
         default: "16T"
         required: true
+      season:
+        description: "Season shown in each sheet's name, e.g. 2026-2027 gives '16 Teal Attendance - Florida Conquer 2026-2027 Season'"
+        default: "2026-2027"
+        required: true
       share_with_coaches:
         description: "Give each team's coach view access (Google emails them). Leave unticked to build the sheets quietly first."
         type: boolean
@@ -35,6 +39,7 @@ jobs:
           TEAM_IDS: ${{ inputs.team_ids }}
           SHEET_IDS: ${{ inputs.sheet_ids }}
           SHARE_WITH_COACHES: ${{ inputs.share_with_coaches }}
+          SEASON_LABEL: ${{ inputs.season }}
           SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}
           SHEET_HELPER_SECRET: ${{ secrets.SHEET_HELPER_SECRET }}
           REPORT_TIMEZONE: "America/New_York"
