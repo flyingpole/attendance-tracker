@@ -66,10 +66,14 @@ async function google(method, url, body, attempt = 1) {
   });
   const text = await res.text();
   if (!res.ok) {
-    // 429 = the Sheets per-minute write quota; the master sheet writes ~25 tabs
-    // in a row, so wait it out (up to ~50s total) instead of failing.
-    if ((res.status === 429 || res.status >= 500) && attempt < 7) {
-      await new Promise((r) => setTimeout(r, Math.min(2000 * attempt, 10000)));
+    // 429 = the Sheets per-minute write quota (~60 writes/min). The quota window is
+    // a minute, so back off in 10-second steps (or as long as Google asks) and keep
+    // trying for a few minutes rather than failing the whole run.
+    if ((res.status === 429 || res.status >= 500) && attempt < 8) {
+      const asked = Number(res.headers.get("retry-after"));
+      const wait = Number.isFinite(asked) && res.headers.get("retry-after") !== null ? asked * 1000 : res.status === 429 ? 10000 * attempt : 2000 * attempt;
+      console.warn(`  ${res.status} from Google; waiting ${Math.round(wait / 1000)}s then retrying (attempt ${attempt})`);
+      await new Promise((r) => setTimeout(r, wait));
       return google(method, url, body, attempt + 1);
     }
     const err = new Error(`${method} ${url.split("?")[0]} -> ${res.status}: ${text.slice(0, 600)}`);
@@ -263,9 +267,9 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
   const totalRows = rendered.lastDataRow;
   const range = (r0, r1, c0, c1) => ({ sheetId, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 });
 
-  // Clear by the tab's current name — a sheet you made by hand is still "Sheet1"
-  // here; the batchUpdate below renames it to TAB.
-  await google("POST", `${SHEETS}/${id}/values/${encodeURIComponent(quoteTab(sheet.properties.title))}:clear`, {});
+  // The first request below wipes the tab's values AND formatting in the same call
+  // as everything else (one write call instead of two; the Sheets API allows only
+  // ~60 writes a minute, and the director's sheet writes ~25 tabs).
 
   const requests = [
     ...(title ? [{ updateSpreadsheetProperties: { properties: { title }, fields: "title" } }] : []),
@@ -284,7 +288,8 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
         fields: "title,gridProperties.rowCount,gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
       },
     },
-    { repeatCell: { range: { sheetId }, cell: { userEnteredFormat: {} }, fields: "userEnteredFormat" } },
+    // No `rows` given: clears the listed fields (values and formatting) on the whole tab.
+    { updateCells: { range: { sheetId }, fields: "userEnteredValue,userEnteredFormat" } },
     ...Array.from({ length: existingRules }, () => ({ deleteConditionalFormatRule: { sheetId, index: 0 } })),
     // Title row
     { repeatCell: { range: range(0, 1, 0, 1), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 11 } } }, fields: "userEnteredFormat.textFormat" } },
@@ -446,7 +451,6 @@ async function writeAllTeamsTab({ id, meta }, rendered) {
     },
   });
 
-  await google("POST", `${SHEETS}/${id}/values/${encodeURIComponent(quoteTab(ALL_TAB))}:clear`, {});
   await google("POST", `${SHEETS}/${id}:batchUpdate`, {
     requests: [
       {
@@ -455,7 +459,7 @@ async function writeAllTeamsTab({ id, meta }, rendered) {
           fields: "gridProperties.rowCount,gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
         },
       },
-      { repeatCell: { range: { sheetId }, cell: { userEnteredFormat: {} }, fields: "userEnteredFormat" } },
+      { updateCells: { range: { sheetId }, fields: "userEnteredValue,userEnteredFormat" } },
       ...Array.from({ length: existingRules }, () => ({ deleteConditionalFormatRule: { sheetId, index: 0 } })),
       { repeatCell: { range: range(0, 1, 0, 1), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 11 } } }, fields: "userEnteredFormat.textFormat" } },
       header(0, 6),
@@ -513,7 +517,7 @@ async function buildMaster(teamResults, updatedLabel) {
   const meta = await syncMasterTabs(master.id, [ALL_TAB, ...tabs.map((t) => t.tabName)]);
   await writeAllTeamsTab({ id: master.id, meta }, renderAllTeamsValues(teamResults, { updatedLabel }));
   for (const t of tabs) {
-    await sleep(1000); // stay under the Sheets per-minute write quota
+    await sleep(3500); // ~3 writes per tab: keeps the master under the Sheets per-minute write quota
     await writeSheet({ id: master.id, meta }, null, t.rendered, t.model.players.length, t.tabName);
   }
 
@@ -632,7 +636,7 @@ async function main() {
   const teamResults = []; // feeds the director's summary sheet
 
   for (const [index, teamId] of teamIds.entries()) {
-    if (index > 0) await sleep(1500); // stay under the Sheets API per-minute write limit
+    if (index > 0) await sleep(3000); // ~3 writes per team: stay under the Sheets API per-minute write limit
     try {
       console.log(`Team ${teamId}`);
       const { team, model } = await loadTeamData(teamId, scheduleEntries, cancellations, now);
