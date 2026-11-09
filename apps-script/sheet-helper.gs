@@ -118,7 +118,14 @@ function dispatchWorkflow_(workflow, inputs, githubToken) {
 //
 // Run installNightlyTrigger ONCE from the editor (it also asks for permission to
 // email you if the nightly start ever fails). Needs the GITHUB_TOKEN property.
-var NIGHTLY_HOUR = 2;
+// Two starts: 2:05 AM (the real one) and 3:35 AM (a catch-up). Firebase's free
+// daily quota resets at 3:00 AM Eastern, so if a day's quota was ever used up,
+// the 2 AM run fails and the 3:35 run finishes the job. When 2 AM worked, the
+// 3:35 start does nothing (the jobs skip if the day's work is already done).
+var NIGHTLY_STARTS = [
+  { hour: 2, minute: 5 },
+  { hour: 3, minute: 35 },
+];
 var NIGHTLY_TIMEZONE = "America/New_York";
 var NIGHTLY_JOBS = [
   ["daily-report.yml", { skip_if_done: "true" }],
@@ -127,15 +134,17 @@ var NIGHTLY_JOBS = [
 
 function installNightlyTrigger() {
   removeNightlyTrigger();
-  ScriptApp.newTrigger("nightlyKick")
-    .timeBased()
-    .inTimezone(NIGHTLY_TIMEZONE)
-    .atHour(NIGHTLY_HOUR)
-    .nearMinute(5)
-    .everyDays(1)
-    .create();
+  NIGHTLY_STARTS.forEach(function (start) {
+    ScriptApp.newTrigger("nightlyKick")
+      .timeBased()
+      .inTimezone(NIGHTLY_TIMEZONE)
+      .atHour(start.hour)
+      .nearMinute(start.minute)
+      .everyDays(1)
+      .create();
+  });
   // Touching MailApp here makes Google ask for the email permission now, not at 2 AM.
-  Logger.log("Nightly trigger installed (about 2:05 AM " + NIGHTLY_TIMEZONE + "). Failure alerts go to " + Session.getEffectiveUser().getEmail() + ". Emails left today: " + MailApp.getRemainingDailyQuota());
+  Logger.log("Nightly triggers installed (about 2:05 AM and 3:35 AM " + NIGHTLY_TIMEZONE + "). Failure alerts go to " + Session.getEffectiveUser().getEmail() + ". Emails left today: " + MailApp.getRemainingDailyQuota());
 }
 
 function removeNightlyTrigger() {

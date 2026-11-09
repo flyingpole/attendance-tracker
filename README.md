@@ -71,7 +71,9 @@ to run at **2:00 AM US Eastern**. Two things make that happen:
 
 1. **On-time start (primary):** a Google Apps Script timer, `nightlyKick` in
    [`apps-script/sheet-helper.gs`](apps-script/sheet-helper.gs), starts both workflows at about
-   2:05 AM Eastern. Install it once by running `installNightlyTrigger` in the Apps Script editor
+   2:05 AM Eastern, and again at 3:35 AM as a catch-up (Firebase's free daily quota resets at
+   3:00 AM Eastern, so if a day's quota was ever used up the 2 AM run fails and the 3:35 run
+   finishes the job; when 2 AM worked, the 3:35 start does nothing). Install it once by running `installNightlyTrigger` in the Apps Script editor
    (needs the `GITHUB_TOKEN` property — see "Run buttons" below). If it ever can't start the jobs
    (e.g. the token expired) it emails the script owner.
 2. **GitHub's own schedule (backup):** each workflow also has cron triggers (06:17 and 09:17 UTC).
@@ -109,7 +111,7 @@ login and then starts the workflow. One-time setup:
    the `SHEET_HELPER_URL` secret) and click Save address.
 5. For the on-time nightly start: in the Apps Script editor pick `installNightlyTrigger` in the
    function menu and click Run (approve the permissions, including sending email). Check
-   Triggers (clock icon) shows one `nightlyKick` daily trigger.
+   Triggers (clock icon) shows two `nightlyKick` daily triggers.
 
 ### 6. Team attendance Google Sheets
 

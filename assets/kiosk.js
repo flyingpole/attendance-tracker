@@ -1,7 +1,7 @@
 import { db } from "./firebase.js";
 import {
   collection,
-  getDocs,
+  onSnapshot,
   query,
   where,
   addDoc,
@@ -62,8 +62,32 @@ backToAutoBtn.addEventListener("click", () => {
 
 // --- Manual override picker (unchanged mechanics — plain buttons, no native
 // popup, so refocus is always synchronous and reliable) ---
-async function loadSessions() {
-  const snap = await getDocs(query(collection(db, "sessions"), where("active", "==", true)));
+//
+// Data arrives through live listeners (onSnapshot) rather than periodic
+// re-reads: after the first load Firestore only sends records that changed, so a
+// kiosk left running all day costs a few hundred reads instead of ~130,000 (the
+// old 5-minute full reload used up the free daily read quota). Edits the
+// director makes also show up on the kiosk immediately.
+function listen(source, handler, label) {
+  return new Promise((resolve) => {
+    onSnapshot(
+      source,
+      (snap) => {
+        handler(snap);
+        resolve();
+      },
+      (err) => {
+        // A listener ends on error (e.g. network trouble); keep the last data
+        // we have and try again shortly.
+        console.error(`Live updates for ${label} stopped:`, err);
+        resolve();
+        setTimeout(() => listen(source, handler, label), 60 * 1000);
+      }
+    );
+  });
+}
+
+function applySessions(snap) {
   const sessions = [];
   snap.forEach((doc) => sessions.push({ id: doc.id, ...doc.data() }));
   sessions.sort((a, b) => a.label.localeCompare(b.label));
@@ -95,28 +119,24 @@ async function loadSessions() {
   }
 }
 
-async function loadSchedule() {
-  const [scheduleSnap, cancelSnap] = await Promise.all([
-    getDocs(collection(db, "schedule")),
-    getDocs(collection(db, "scheduleCancellations")),
-  ]);
+function applySchedule(snap) {
   scheduleEntries = [];
-  scheduleSnap.forEach((doc) => scheduleEntries.push({ id: doc.id, ...doc.data() }));
-  scheduleCancellations = [];
-  cancelSnap.forEach((doc) => scheduleCancellations.push(doc.data()));
+  snap.forEach((doc) => scheduleEntries.push({ id: doc.id, ...doc.data() }));
 }
 
-async function loadRoster() {
-  const [teamsSnap, playersSnap] = await Promise.all([
-    getDocs(collection(db, "teams")),
-    getDocs(collection(db, "players")),
-  ]);
+function applyCancellations(snap) {
+  scheduleCancellations = [];
+  snap.forEach((doc) => scheduleCancellations.push(doc.data()));
+}
 
+function applyTeams(snap) {
   teamsById = new Map();
-  teamsSnap.forEach((doc) => teamsById.set(doc.id, doc.data()));
+  snap.forEach((doc) => teamsById.set(doc.id, doc.data()));
+}
 
+function applyPlayers(snap) {
   playersByBadge = new Map();
-  playersSnap.forEach((doc) => {
+  snap.forEach((doc) => {
     const data = doc.data();
     if (data.active === false) return;
     playersByBadge.set(data.badgeCode, { id: doc.id, ...data });
@@ -236,18 +256,19 @@ setInterval(() => {
 
 async function init() {
   setFlash("Loading roster…", "idle");
-  await Promise.all([loadSessions(), loadRoster(), loadSchedule()]);
+  // Live listeners: resolves once every collection has delivered its first snapshot.
+  await Promise.all([
+    listen(query(collection(db, "sessions"), where("active", "==", true)), applySessions, "sessions"),
+    listen(collection(db, "teams"), applyTeams, "teams"),
+    listen(collection(db, "players"), applyPlayers, "players"),
+    listen(collection(db, "schedule"), applySchedule, "schedule"),
+    listen(collection(db, "scheduleCancellations"), applyCancellations, "cancellations"),
+  ]);
   setFlash("Ready — scan a badge to check in.", "idle");
   focusInput();
 }
 
 init();
-// Refresh roster/sessions/schedule periodically in case the director makes changes mid-day.
-setInterval(() => {
-  loadSessions();
-  loadRoster();
-  loadSchedule();
-}, 5 * 60 * 1000);
 
 // --- Soft kiosk deterrents ---
 // A web page can't truly block closing the window or navigating away — that's
