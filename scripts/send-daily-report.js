@@ -6,10 +6,13 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import nodemailer from "nodemailer";
 
 const TZ = process.env.REPORT_TIMEZONE || "America/New_York";
-const DIRECTOR_EMAIL = process.env.DIRECTOR_EMAIL;
+// The director's address is normally the one saved in the admin console
+// (Teams tab -> Director email, stored in Firestore settings/director); the
+// DIRECTOR_EMAIL secret in GitHub is the fallback if none is saved there.
+let DIRECTOR_EMAIL = (process.env.DIRECTOR_EMAIL || "").trim();
 const FROM_NAME = process.env.FROM_NAME || "Florida Conquer Attendance";
 
-for (const required of ["FIREBASE_SERVICE_ACCOUNT", "GMAIL_USER", "GMAIL_APP_PASSWORD", "DIRECTOR_EMAIL"]) {
+for (const required of ["FIREBASE_SERVICE_ACCOUNT", "GMAIL_USER", "GMAIL_APP_PASSWORD"]) {
   if (!process.env[required]) {
     console.error(`Missing required environment variable: ${required}`);
     process.exit(1);
@@ -60,12 +63,38 @@ function renderTeamTable(teamRecords) {
 }
 
 async function main() {
-  const now = new Date();
-  const targetDate = localDateStr(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+  const directorDoc = await db.collection("settings").doc("director").get();
+  const savedEmail = directorDoc.exists ? String(directorDoc.data().email || "").trim() : "";
+  if (savedEmail) DIRECTOR_EMAIL = savedEmail;
+  if (!DIRECTOR_EMAIL) {
+    throw new Error("No director email: set it on the admin Teams tab, or add the DIRECTOR_EMAIL secret in GitHub.");
+  }
+  console.log(`Director email source: ${savedEmail ? "admin console setting" : "DIRECTOR_EMAIL secret"}`);
 
-  // Coarse Firestore range filter (last 48h); exact day filtering happens below via
+  const now = new Date();
+  // REPORT_DATE (YYYY-MM-DD) re-sends the report for a specific past day, e.g. to
+  // catch up after missed nights; otherwise it's always "yesterday".
+  const reportDateOverride = /^\d{4}-\d{2}-\d{2}$/.test(process.env.REPORT_DATE || "") ? process.env.REPORT_DATE : "";
+  const targetDate = reportDateOverride || localDateStr(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+
+  // GitHub starts scheduled runs hours late and may fire several triggers per day, so
+  // scheduled/nightly runs only send if this day's report hasn't already gone out.
+  const statusRef = db.collection("settings").doc("jobStatus");
+  if (!reportDateOverride && /^true$/i.test(process.env.SKIP_IF_DONE || "")) {
+    const status = (await statusRef.get()).data() || {};
+    if (status.emailSentFor === targetDate) {
+      console.log(`The report for ${targetDate} was already sent (${status.emailSentAt || "earlier"}); nothing to do.`);
+      return;
+    }
+  }
+
+  // Coarse Firestore range filter; exact day filtering happens below via
   // local-date-string comparison so we don't have to hand-roll timezone/DST math.
-  const cutoff = Timestamp.fromDate(new Date(now.getTime() - 48 * 60 * 60 * 1000));
+  // Normally the last 48h; for a REPORT_DATE catch-up, a window around that day.
+  const windowStart = reportDateOverride
+    ? new Date(new Date(`${reportDateOverride}T12:00:00Z`).getTime() - 36 * 60 * 60 * 1000)
+    : new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  const cutoff = Timestamp.fromDate(windowStart);
   const snap = await db.collection("attendance").where("timestamp", ">=", cutoff).get();
 
   const records = [];
@@ -130,6 +159,12 @@ async function main() {
   console.log(
     `Report for ${targetDate}: ${records.length} check-ins across ${byTeam.size} teams. Sent director email + ${coachEmailsSent} coach emails.`
   );
+
+  // Remember it (shown on the admin Reports tab, and used to skip duplicate triggers).
+  // A catch-up for an older date doesn't change the nightly record.
+  if (!reportDateOverride) {
+    await statusRef.set({ emailSentFor: targetDate, emailSentAt: new Date().toISOString() }, { merge: true });
+  }
 }
 
 main().catch((err) => {

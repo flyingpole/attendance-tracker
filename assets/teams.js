@@ -15,6 +15,28 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Catches typos like "gmail.om" or "gmial.com": a domain within two edits of a
+// well-known mail provider (but not exactly it) is probably a mistake.
+const COMMON_MAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "msn.com", "live.com", "comcast.net"];
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
+function suggestMailDomain(email) {
+  const domain = email.split("@")[1]?.toLowerCase() || "";
+  if (COMMON_MAIL_DOMAINS.includes(domain)) return null;
+  return COMMON_MAIL_DOMAINS.find((d) => editDistance(domain, d) <= 2) || null;
+}
+
 // Firestore batches hold at most 500 writes.
 async function deleteRefs(db, refs) {
   for (let i = 0; i < refs.length; i += 400) {
@@ -37,6 +59,19 @@ export function initTeamsTab(container) {
       <label for="seasonLabel">Season label</label>
       <input id="seasonLabel" type="text" placeholder="2026-2027" />
       <button id="saveSeasonBtn" style="margin-top:1rem;">Save season</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Director email</h2>
+      <p style="color:var(--muted); margin-top:-0.5rem;">
+        Receives the nightly all-teams email report, and is given view access to the director's
+        summary sheet. If this is blank, the <code>DIRECTOR_EMAIL</code> secret in GitHub is used instead.
+        Changes take effect on the next nightly run (or from the Reports tab).
+      </p>
+      <div id="directorStatus"></div>
+      <label for="directorEmail">Director email address</label>
+      <input id="directorEmail" type="email" placeholder="director@example.com" />
+      <button id="saveDirectorBtn" style="margin-top:1rem;">Save director email</button>
     </div>
 
     <div class="card">
@@ -91,6 +126,39 @@ export function initTeamsTab(container) {
       updateSeasonPreview();
     })
     .catch((err) => console.warn("Couldn't load season setting:", err.message));
+
+  // Director email (Firestore settings/director), read by the nightly email and sheet jobs.
+  const directorInput = container.querySelector("#directorEmail");
+  const directorStatus = container.querySelector("#directorStatus");
+
+  getDoc(doc(db, "settings", "director"))
+    .then((snap) => {
+      if (snap.exists() && snap.data().email) directorInput.value = snap.data().email;
+    })
+    .catch((err) => console.warn("Couldn't load director email:", err.message));
+
+  container.querySelector("#saveDirectorBtn").addEventListener("click", async () => {
+    const email = directorInput.value.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+      directorStatus.innerHTML = `<div class="status-banner error">That doesn't look like an email address. Check for typos (e.g. ".com").</div>`;
+      return;
+    }
+    const suggestion = email && suggestMailDomain(email);
+    if (suggestion && directorInput.dataset.confirmed !== email) {
+      directorStatus.innerHTML = `<div class="status-banner error">Did you mean <strong>${escapeHtml(email.split("@")[0])}@${suggestion}</strong>? "${escapeHtml(email.split("@")[1])}" looks like a typo. Fix it, or click Save again if it's really correct.</div>`;
+      directorInput.dataset.confirmed = email;
+      return;
+    }
+    try {
+      await setDoc(doc(db, "settings", "director"), { email });
+      directorStatus.innerHTML = email
+        ? `<div class="status-banner ok">Director email saved as ${escapeHtml(email)}. It's used from the next nightly run.</div>`
+        : `<div class="status-banner info">Cleared. The DIRECTOR_EMAIL secret in GitHub will be used instead.</div>`;
+    } catch (err) {
+      const hint = err.code === "permission-denied" ? " Publish the latest firestore.rules in the Firebase console, or log in again." : "";
+      directorStatus.innerHTML = `<div class="status-banner error">Couldn't save: ${escapeHtml(String(err.message).replace(/\.$/, ""))}.${hint}</div>`;
+    }
+  });
 
   container.querySelector("#saveSeasonBtn").addEventListener("click", async () => {
     const label = seasonInput.value.trim();

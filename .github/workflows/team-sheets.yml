@@ -1,12 +1,15 @@
 name: Team Attendance Sheets
 
 on:
-  # Nightly at 2 AM US Eastern (see daily-report.yml for why there are two
-  # entries and a gate step). Scheduled runs rebuild every team's sheet and the
-  # director's summary, and keep the coach/director access up to date (silently).
+  # SAFETY NET (see daily-report.yml). The on-time 2 AM Eastern trigger is the
+  # Apps Script nightly trigger; GitHub's scheduler has been starting runs 7-10
+  # hours late, so these only catch a night it missed. The job skips if the
+  # full rebuild already completed today, so extra triggers are harmless.
+  # Scheduled runs rebuild every team's sheet and the director's summary, and
+  # keep the coach/director access up to date (silently).
   schedule:
     - cron: "17 6 * * *"
-    - cron: "17 7 * * *"
+    - cron: "17 9 * * *"
   # Manual: Actions tab -> "Team Attendance Sheets" -> Run workflow (or the
   # Reports tab in the admin console).
   workflow_dispatch:
@@ -24,11 +27,15 @@ on:
         type: boolean
         default: false
       share_with_director:
-        description: "With build_master: give the director (DIRECTOR_EMAIL secret) view access. No email is sent."
+        description: "With build_master: give the director (email set on the admin Teams tab) view access. No email is sent."
         type: boolean
         default: true
       share_with_coaches:
         description: "Give each team's coach view access (no email is sent; use Email to coach on the Teams tab). Leave unticked to build the sheets first."
+        type: boolean
+        default: false
+      skip_if_done:
+        description: "Skip if the full rebuild already completed today (used by the nightly trigger)."
         type: boolean
         default: false
       sheet_ids:
@@ -48,31 +55,12 @@ jobs:
       run:
         working-directory: scripts
     steps:
-      - id: gate
-        # Runs before checkout, so the job-wide "scripts" folder doesn't exist yet.
-        working-directory: ${{ github.workspace }}
-        run: |
-          # Run in the 2 AM Eastern hour. The one exception is the spring night the
-          # clocks jump from 2 AM to 3 AM: there is no 2 AM, so run at 3 AM, which is
-          # recognizable because an hour earlier it was still 1 AM.
-          HOUR=$(TZ=America/New_York date +%H)
-          PREV=$(TZ=America/New_York date -d '1 hour ago' +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$HOUR" != "02" ] && { [ "$HOUR" != "03" ] || [ "$PREV" != "01" ]; }; then
-            echo "Not the 2 AM Eastern hour ($(TZ=America/New_York date)); skipping this duplicate trigger."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@v4
-      - if: steps.gate.outputs.run == 'true'
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - if: steps.gate.outputs.run == 'true'
-        run: npm install
-      - if: steps.gate.outputs.run == 'true'
-        run: node build-team-sheets.js
+      - run: npm install
+      - run: node build-team-sheets.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
           # Scheduled runs have no inputs, so they default to everything.
@@ -81,6 +69,7 @@ jobs:
           SHARE_WITH_COACHES: ${{ github.event_name == 'schedule' || inputs.share_with_coaches }}
           BUILD_MASTER: ${{ github.event_name == 'schedule' || inputs.build_master }}
           SHARE_WITH_DIRECTOR: ${{ github.event_name == 'schedule' || inputs.share_with_director }}
+          SKIP_IF_DONE: ${{ github.event_name == 'schedule' || inputs.skip_if_done }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
           SEASON_LABEL: ${{ inputs.season }}
           SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}

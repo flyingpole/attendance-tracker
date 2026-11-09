@@ -32,8 +32,8 @@ var GITHUB_REPO = "flyingpole/attendance-tracker";
 var GITHUB_BRANCH = "master";
 // Which workflows may be started, and which inputs each accepts.
 var ALLOWED_WORKFLOWS = {
-  "daily-report.yml": [],
-  "team-sheets.yml": ["team_ids", "build_master", "share_with_director", "share_with_coaches"],
+  "daily-report.yml": ["skip_if_done"],
+  "team-sheets.yml": ["team_ids", "build_master", "share_with_director", "share_with_coaches", "skip_if_done"],
 };
 
 function runWorkflow_(body) {
@@ -73,22 +73,7 @@ function runWorkflow_(body) {
     return reply_({ ok: false, error: "That job was just started. Give it a minute before starting it again." });
   }
 
-  var response = UrlFetchApp.fetch(
-    "https://api.github.com/repos/" + GITHUB_REPO + "/actions/workflows/" + body.workflow + "/dispatches",
-    {
-      method: "post",
-      contentType: "application/json",
-      headers: {
-        Authorization: "Bearer " + githubToken,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "florida-conquer-attendance",
-      },
-      payload: JSON.stringify({ ref: GITHUB_BRANCH, inputs: inputs }),
-      muteHttpExceptions: true,
-    }
-  );
-  var code = response.getResponseCode();
+  var code = dispatchWorkflow_(body.workflow, inputs, githubToken);
   if (code === 204) {
     cache.put(lockKey, "1", 60);
     return reply_({ ok: true });
@@ -97,6 +82,90 @@ function runWorkflow_(body) {
   if (code === 401) hint = " The GitHub token is invalid or expired; make a new one and update GITHUB_TOKEN.";
   if (code === 403 || code === 404) hint = " The GitHub token needs 'Actions: Read and write' on this repository.";
   return reply_({ ok: false, error: "GitHub refused (HTTP " + code + ")." + hint });
+}
+
+// Starts a GitHub workflow; returns the HTTP status (204 = started). Retries
+// briefly on GitHub-side errors (5xx).
+function dispatchWorkflow_(workflow, inputs, githubToken) {
+  var code = 0;
+  for (var attempt = 1; attempt <= 3; attempt++) {
+    var response = UrlFetchApp.fetch(
+      "https://api.github.com/repos/" + GITHUB_REPO + "/actions/workflows/" + workflow + "/dispatches",
+      {
+        method: "post",
+        contentType: "application/json",
+        headers: {
+          Authorization: "Bearer " + githubToken,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "florida-conquer-attendance",
+        },
+        payload: JSON.stringify({ ref: GITHUB_BRANCH, inputs: inputs }),
+        muteHttpExceptions: true,
+      }
+    );
+    code = response.getResponseCode();
+    if (code < 500) break;
+    Utilities.sleep(5000 * attempt);
+  }
+  return code;
+}
+
+// ---- Nightly start at 2 AM Eastern ------------------------------------------
+// GitHub's own scheduler has been starting scheduled runs 7-10 hours late, so
+// THIS is what starts the nightly jobs on time. (GitHub's schedule stays as a
+// backup; both jobs skip if the day's work is already done.)
+//
+// Run installNightlyTrigger ONCE from the editor (it also asks for permission to
+// email you if the nightly start ever fails). Needs the GITHUB_TOKEN property.
+var NIGHTLY_HOUR = 2;
+var NIGHTLY_TIMEZONE = "America/New_York";
+var NIGHTLY_JOBS = [
+  ["daily-report.yml", { skip_if_done: "true" }],
+  ["team-sheets.yml", { team_ids: "ALL", build_master: "true", share_with_director: "true", share_with_coaches: "true", skip_if_done: "true" }],
+];
+
+function installNightlyTrigger() {
+  removeNightlyTrigger();
+  ScriptApp.newTrigger("nightlyKick")
+    .timeBased()
+    .inTimezone(NIGHTLY_TIMEZONE)
+    .atHour(NIGHTLY_HOUR)
+    .nearMinute(5)
+    .everyDays(1)
+    .create();
+  // Touching MailApp here makes Google ask for the email permission now, not at 2 AM.
+  Logger.log("Nightly trigger installed (about 2:05 AM " + NIGHTLY_TIMEZONE + "). Failure alerts go to " + Session.getEffectiveUser().getEmail() + ". Emails left today: " + MailApp.getRemainingDailyQuota());
+}
+
+function removeNightlyTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "nightlyKick") ScriptApp.deleteTrigger(trigger);
+  });
+}
+
+function nightlyKick() {
+  var githubToken = PropertiesService.getScriptProperties().getProperty("GITHUB_TOKEN");
+  var problems = [];
+  if (!githubToken) {
+    problems.push("The GITHUB_TOKEN script property is missing.");
+  } else {
+    NIGHTLY_JOBS.forEach(function (job) {
+      var code = dispatchWorkflow_(job[0], job[1], githubToken);
+      if (code !== 204) {
+        problems.push(job[0] + ": GitHub refused to start it (HTTP " + code + ")." + (code === 401 ? " The GitHub token has probably expired." : ""));
+      }
+    });
+  }
+  if (problems.length) {
+    // Tell the owner, since nothing else would. GitHub's backup schedule may still run late.
+    MailApp.sendEmail(
+      Session.getEffectiveUser().getEmail(),
+      "Attendance nightly start failed",
+      "The 2 AM attendance jobs could not be started:\n\n" + problems.join("\n") +
+        "\n\nGitHub's own backup schedule may still run them, but later. To fix an expired token: create a new one and update the GITHUB_TOKEN script property."
+    );
+  }
 }
 
 // Asks Google whether this Firebase login token is genuine and current.

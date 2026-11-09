@@ -49,7 +49,9 @@ passwords don't work for programmatic sending, so you need an **App Password** i
 3. Add these repo secrets (**Settings → Secrets and variables → Actions → New repository secret**):
    - `GMAIL_USER` — the full Gmail address (e.g. `you@gmail.com`)
    - `GMAIL_APP_PASSWORD` — the 16-character app password from step 2 (not your regular Gmail password)
-   - `DIRECTOR_EMAIL` — the director's email address (receives the full daily summary)
+   - `DIRECTOR_EMAIL` — the director's email address (receives the full daily summary).
+     This is only the fallback: an address saved in the admin console (Teams tab → Director
+     email) takes priority, so you normally change it there instead.
 
 Gmail caps regular accounts at 500 sends/day, far more than a club needs. If you'd
 rather use a dedicated transactional service instead (e.g. Resend, SendGrid) later,
@@ -64,13 +66,24 @@ swap the `nodemailer` transport in `scripts/send-daily-report.js` for their SDK.
 ### 5. Nightly report timing
 
 Both nightly jobs — the email report ([`daily-report.yml`](.github/workflows/daily-report.yml))
-and the Google Sheets rebuild ([`team-sheets.yml`](.github/workflows/team-sheets.yml)) — run at
-**2:00 AM US Eastern**. GitHub cron is UTC only, so each workflow lists two triggers (06:17 and
-07:17 UTC) and a "gate" step lets only the one that lands in the 2 AM Eastern hour do the work
-(the other finishes in seconds and shows as "Skipped (duplicate trigger)"). This keeps the time
-right across daylight saving. The odd minute (:17) avoids GitHub's top-of-the-hour rush.
-GitHub doesn't guarantee an exact start time, but at 2 AM runs normally begin within minutes.
-Scheduled sheet rebuilds also keep the coach/director sharing up to date (silently).
+and the Google Sheets rebuild ([`team-sheets.yml`](.github/workflows/team-sheets.yml)) — are meant
+to run at **2:00 AM US Eastern**. Two things make that happen:
+
+1. **On-time start (primary):** a Google Apps Script timer, `nightlyKick` in
+   [`apps-script/sheet-helper.gs`](apps-script/sheet-helper.gs), starts both workflows at about
+   2:05 AM Eastern. Install it once by running `installNightlyTrigger` in the Apps Script editor
+   (needs the `GITHUB_TOKEN` property — see "Run buttons" below). If it ever can't start the jobs
+   (e.g. the token expired) it emails the script owner.
+2. **GitHub's own schedule (backup):** each workflow also has cron triggers (06:17 and 09:17 UTC).
+   GitHub's scheduler is unreliable — in practice it has started scheduled runs **7–10 hours late**
+   — so these only catch a night the timer missed, and they must never be relied on for timing.
+
+Duplicate triggers are harmless: nightly runs record what they finished in Firestore
+(`settings/jobStatus`) and skip if that day's work is already done. Manual runs always run. The
+admin **Reports** tab shows when each job last completed and turns red if a night was missed.
+
+To re-send the email report for a past day (e.g. to catch up after missed nights), run
+**Daily Attendance Report** from the Actions tab and put the date (YYYY-MM-DD) in `report_date`.
 
 You can re-run either job any time from the **Reports** tab in the admin console (see
 "Run buttons" below) or from the **Actions** tab on GitHub (`workflow_dispatch`).
@@ -94,6 +107,9 @@ login and then starts the workflow. One-time setup:
 3. Re-paste the latest `sheet-helper.gs`, then Deploy → Manage deployments → Edit → New version.
 4. In the admin console → Reports → Setup, paste the helper's web app address (the same URL as
    the `SHEET_HELPER_URL` secret) and click Save address.
+5. For the on-time nightly start: in the Apps Script editor pick `installNightlyTrigger` in the
+   function menu and click Run (approve the permissions, including sending email). Check
+   Triggers (clock icon) shows one `nightlyKick` daily trigger.
 
 ### 6. Team attendance Google Sheets
 
@@ -121,7 +137,8 @@ whose email isn't one (e.g. Yahoo) is reported as "could NOT share" in the run s
 team's sheet, then builds one spreadsheet named "All Teams Attendance Summary - Florida Conquer
 <season> Season" with an **All Teams** tab (every player on one sortable/filterable table, plus a
 per-team overview) and one tab per team that mirrors that team's sheet. It's shared view-only with
-the address in the `DIRECTOR_EMAIL` secret, silently (untick **share_with_director** to skip). The
+the director's email (set on the admin Teams tab; the `DIRECTOR_EMAIL` secret is the fallback),
+silently (untick **share_with_director** to skip). The
 workflow checks that address's mail domain first and skips sharing if it looks mistyped.
 
 Alternatively, create a blank Sheet by hand, share it with the service account (Editor), and

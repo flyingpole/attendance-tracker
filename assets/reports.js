@@ -45,6 +45,7 @@ export function initReportsTab(container) {
         Both jobs already run by themselves every night at 2:00 AM Eastern. Use these buttons
         to re-run one — for example after fixing a schedule or a roster, or if a night's run failed.
       </p>
+      <div id="nightlyStatus" style="margin-bottom:1rem;"></div>
       <div id="reportsStatus"></div>
 
       <h3 style="margin-bottom:0.25rem;">Daily email report</h3>
@@ -100,6 +101,42 @@ export function initReportsTab(container) {
   function showStatus(kind, message) {
     statusEl.innerHTML = `<div class="status-banner ${kind}">${escapeHtml(message)}</div>`;
     statusEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  // ---- last completed nightly work (written by the jobs to settings/jobStatus) ----
+  const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const prettyDay = (key) => new Date(`${key}T12:00:00`).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const prettyTime = (iso) => new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  async function loadNightlyStatus() {
+    const el = $("#nightlyStatus");
+    let status = {};
+    try {
+      const snap = await getDoc(doc(db, "settings", "jobStatus"));
+      status = (snap.exists() && snap.data()) || {};
+    } catch (err) {
+      el.innerHTML = "";
+      return;
+    }
+    const now = new Date();
+    const dayBack = (n) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - n));
+    // The jobs start around 2 AM, so from 6 AM on, last night's run should be in.
+    const after6 = now.getHours() >= 6;
+    const expectedEmail = after6 ? dayBack(1) : dayBack(2); // the day the report covers
+    const expectedSheets = after6 ? dayBack(0) : dayBack(1); // the day the rebuild ran
+
+    const line = (label, doneKey, doneAt, expected, what) => {
+      const ok = doneKey && doneKey >= expected;
+      const text = doneKey
+        ? `${label}: ${what} ${prettyDay(doneKey)} — completed ${prettyTime(doneAt)}`
+        : `${label}: no nightly run recorded yet`;
+      return `<div class="status-banner ${ok ? "ok" : "error"}" style="margin-bottom:0.4rem;">${escapeHtml(text)}${
+        ok ? "" : " — <strong>behind schedule.</strong> Use the button below to run it now."
+      }</div>`;
+    };
+    el.innerHTML =
+      line("Email report", status.emailSentFor, status.emailSentAt, expectedEmail, "last sent for") +
+      line("Attendance sheets", status.sheetsBuiltFor, status.sheetsBuiltAt, expectedSheets, "last fully rebuilt");
   }
 
   // ---- recent runs ----
@@ -165,6 +202,7 @@ export function initReportsTab(container) {
       if (!result.ok) throw new Error(result.error || "The helper refused the request.");
       showStatus("ok", `Started: ${label}. It shows up under Recent runs in a few seconds.`);
       setTimeout(() => refreshRuns([key(workflow)]), 5000);
+      setTimeout(loadNightlyStatus, 90000); // pick up the "last completed" line once the job has had time to finish
     } catch (err) {
       showStatus("error", err.message);
     } finally {
@@ -229,6 +267,7 @@ export function initReportsTab(container) {
     } catch (err) {
       console.warn("Couldn't load teams:", err.message);
     }
+    loadNightlyStatus();
     refreshRuns();
   })();
 }

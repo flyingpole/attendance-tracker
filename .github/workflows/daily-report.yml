@@ -2,15 +2,25 @@ name: Daily Attendance Report
 
 on:
   schedule:
-    # GitHub cron is UTC only. 2 AM US Eastern is 06:00 UTC (daylight time) or
-    # 07:00 UTC (standard time), so both are listed and the "gate" step lets only
-    # the one that actually lands in the 2 AM Eastern hour do the work. The :17
-    # minute avoids the top-of-the-hour rush, when GitHub delays scheduled jobs most.
-    # Scheduled workflows are auto-disabled after 60 days of repo inactivity;
-    # re-enable under Actions if that happens.
+    # SAFETY NET. The on-time trigger is the Apps Script nightly trigger in
+    # apps-script/sheet-helper.gs (2 AM Eastern), which starts this workflow via
+    # workflow_dispatch. GitHub's own scheduler is unreliable here: it has been
+    # starting scheduled runs 7-10 hours late, so these only catch a night the
+    # Apps Script trigger missed. The script skips if the day's report already
+    # went out, so extra triggers are harmless. (GitHub cron is UTC.)
+    # Scheduled workflows are auto-disabled after 60 days of repo inactivity.
     - cron: "17 6 * * *"
-    - cron: "17 7 * * *"
-  workflow_dispatch: {}
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_if_done:
+        description: "Skip if yesterday's report has already been sent (used by the nightly trigger)."
+        type: boolean
+        default: false
+      report_date:
+        description: "Optional catch-up: re-send the report for this day (YYYY-MM-DD) instead of yesterday."
+        default: ""
+        required: false
 
 # Never run two at once (e.g. a scheduled run and a button press).
 concurrency:
@@ -24,35 +34,18 @@ jobs:
       run:
         working-directory: scripts
     steps:
-      - id: gate
-        # Runs before checkout, so the job-wide "scripts" folder doesn't exist yet.
-        working-directory: ${{ github.workspace }}
-        run: |
-          # Run in the 2 AM Eastern hour. The one exception is the spring night the
-          # clocks jump from 2 AM to 3 AM: there is no 2 AM, so run at 3 AM, which is
-          # recognizable because an hour earlier it was still 1 AM.
-          HOUR=$(TZ=America/New_York date +%H)
-          PREV=$(TZ=America/New_York date -d '1 hour ago' +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$HOUR" != "02" ] && { [ "$HOUR" != "03" ] || [ "$PREV" != "01" ]; }; then
-            echo "Not the 2 AM Eastern hour ($(TZ=America/New_York date)); skipping this duplicate trigger."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@v4
-      - if: steps.gate.outputs.run == 'true'
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - if: steps.gate.outputs.run == 'true'
-        run: npm install
-      - if: steps.gate.outputs.run == 'true'
-        run: node send-daily-report.js
+      - run: npm install
+      - run: node send-daily-report.js
         env:
           # The key was saved in GitHub as "SERVICE_ACCOUNT"; accept either name.
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.SERVICE_ACCOUNT }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
+          SKIP_IF_DONE: ${{ github.event_name == 'schedule' || inputs.skip_if_done }}
+          REPORT_DATE: ${{ inputs.report_date }}
           REPORT_TIMEZONE: "America/New_York"

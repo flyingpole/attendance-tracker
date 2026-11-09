@@ -33,8 +33,13 @@ const TEAM_IDS = (process.env.TEAM_IDS || "16T").split(",").map((s) => s.trim())
 // refreshes every team first so the master's team tabs match the team sheets.
 const BUILD_MASTER = /^true$/i.test(process.env.BUILD_MASTER || "");
 const SHARE_WITH_DIRECTOR = /^true$/i.test(process.env.SHARE_WITH_DIRECTOR || "");
-const DIRECTOR_EMAIL = (process.env.DIRECTOR_EMAIL || "").trim();
+// Normally the address saved in the admin console (Firestore settings/director);
+// the DIRECTOR_EMAIL secret is the fallback.
+let DIRECTOR_EMAIL = (process.env.DIRECTOR_EMAIL || "").trim();
 const MASTER_KEY = "MASTER"; // reportSheets doc id / SHEET_IDS key for the director's spreadsheet
+// GitHub starts scheduled runs hours late and may fire several triggers a day, so
+// nightly runs skip if the full rebuild already completed today.
+const SKIP_IF_DONE = /^true$/i.test(process.env.SKIP_IF_DONE || "");
 // Comma-separated emails that get edit access to every team sheet (optional).
 const EDITOR_EMAILS = (process.env.SHARE_EDITORS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
@@ -476,18 +481,18 @@ async function writeAllTeamsTab({ id, meta }, rendered) {
 // mistyped before — don't send a share to an address that can't receive mail.
 async function usableDirectorEmail() {
   if (!DIRECTOR_EMAIL) {
-    console.warn("DIRECTOR_EMAIL isn't set — the summary sheet won't be shared with the director.");
+    console.warn("No director email is set (admin Teams tab or DIRECTOR_EMAIL secret) — the summary sheet won't be shared with the director.");
     return "";
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(DIRECTOR_EMAIL)) {
-    console.warn("DIRECTOR_EMAIL doesn't look like an email address — check the secret.");
+    console.warn("The director email doesn't look like an email address — check it on the admin Teams tab.");
     return "";
   }
   try {
     await resolveMx(DIRECTOR_EMAIL.split("@")[1]);
     return DIRECTOR_EMAIL;
   } catch {
-    console.warn("DIRECTOR_EMAIL's domain has no mail servers (typo?) — check the secret. Not sharing.");
+    console.warn("The director email's domain has no mail servers (typo?) — check it on the admin Teams tab. Not sharing.");
     return "";
   }
 }
@@ -594,12 +599,24 @@ async function preflight() {
 }
 
 async function main() {
+  const statusRef = db.collection("settings").doc("jobStatus");
+  if (SKIP_IF_DONE && BUILD_MASTER) {
+    const status = (await statusRef.get()).data() || {};
+    if (status.sheetsBuiltFor === localDateKey(new Date())) {
+      console.log(`The sheets were already fully rebuilt today (${status.sheetsBuiltAt || "earlier"}); nothing to do.`);
+      return;
+    }
+  }
   await preflight();
   if (!SEASON) {
     const seasonDoc = await db.collection("settings").doc("season").get();
     SEASON = (seasonDoc.exists && String(seasonDoc.data().label || "").trim()) || DEFAULT_SEASON;
   }
   console.log(`Season: ${SEASON}`);
+  const directorDoc = await db.collection("settings").doc("director").get();
+  const savedDirector = directorDoc.exists ? String(directorDoc.data().email || "").trim() : "";
+  if (savedDirector) DIRECTOR_EMAIL = savedDirector;
+  console.log(`Director email source: ${savedDirector ? "admin console setting" : DIRECTOR_EMAIL ? "DIRECTOR_EMAIL secret" : "none set"}`);
   const now = new Date();
   const [scheduleSnap, cancelSnap] = await Promise.all([db.collection("schedule").get(), db.collection("scheduleCancellations").get()]);
   const scheduleEntries = scheduleSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -675,6 +692,10 @@ async function main() {
 
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Team attendance sheets\n\n${summaryLines.join("\n")}\n`);
+  }
+  // Remember a clean full rebuild (shown on the admin Reports tab, used to skip duplicate triggers).
+  if (BUILD_MASTER && !failed) {
+    await statusRef.set({ sheetsBuiltFor: localDateKey(new Date()), sheetsBuiltAt: new Date().toISOString() }, { merge: true });
   }
   if (failed) process.exit(1);
 }
