@@ -36,6 +36,21 @@ const ALIASES = {
   "defensive specialist": "libero-defense",
 };
 
+// Is this check-in for a positional practice? Positional check-ins reach the
+// database three ways, and all of them count:
+//  - the kiosk's Saturday buttons / Manual Attendance (id "positional-<key>"),
+//  - a scheduled positional entry on the Master Schedule (its id), or
+//  - the kiosk's MANUAL picker, whose sessions are free-text names the director
+//    made on the Practice Sessions tab ("OH Positional", "DEF Positional", ...) and
+//    have their own ids — recognized by "Positional" in the session name.
+export function isPositionalCheckIn({ sessionId, sessionLabel }, scheduledPositionalIds = new Set()) {
+  return (
+    scheduledPositionalIds.has(sessionId) ||
+    isPositionalSessionId(sessionId) ||
+    /positional/i.test(String(sessionLabel || ""))
+  );
+}
+
 export function positionalKeyFor(name) {
   return ALIASES[String(name || "").trim().toLowerCase().replace(/\s+/g, " ")] || null;
 }

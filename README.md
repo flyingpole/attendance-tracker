@@ -128,6 +128,10 @@ the requirement (the cell shows the first arrival time, plus "+N" if they attend
 every Saturday has clinics (tournaments, holidays), so a Saturday only gets a row when **at least
 one player on any team** checked into a positional that day; if so, everyone on the team who
 didn't attend one shows ✗. The summary splits out Team Practice Miss % and Positional Miss %.
+A check-in counts as positional however it was recorded: a Saturday button on the kiosk, a
+scheduled positional entry, or a **manual-picker session** whose name contains the word
+"Positional" (e.g. "OH Positional" on the Practice Sessions tab) — so keep "Positional" in the
+name of any manual positional session.
 
 Robot (service) accounts have no Drive storage, so they can't create files. A small Apps Script
 helper creates each sheet in the director's own Drive; the workflow then fills it in.

@@ -11,7 +11,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { GoogleAuth } from "google-auth-library";
 import { appendFileSync } from "node:fs";
 import { resolveMx } from "node:dns/promises";
-import { isPositionalSessionId } from "../assets/positional.js";
+import { isPositionalCheckIn } from "../assets/positional.js";
 import {
   buildAttendanceModel,
   renderSheetValues,
@@ -120,10 +120,16 @@ async function loadAllAttendance(scheduleEntries) {
     const r = d.data();
     if (!r.timestamp || !r.playerId) return;
     const time = r.timestamp.toDate();
-    const record = { playerId: r.playerId, sessionId: r.sessionId, dateKey: localDateKey(time), time };
+    const record = {
+      playerId: r.playerId,
+      sessionId: r.sessionId,
+      dateKey: localDateKey(time),
+      time,
+      positional: isPositionalCheckIn(r, positionalEntryIds),
+    };
     if (!byPlayer.has(r.playerId)) byPlayer.set(r.playerId, []);
     byPlayer.get(r.playerId).push(record);
-    if (positionalEntryIds.has(r.sessionId) || isPositionalSessionId(r.sessionId)) heldPositionalDates.add(record.dateKey);
+    if (record.positional) heldPositionalDates.add(record.dateKey);
   });
   console.log(`Loaded ${snap.size} check-ins; positional practices were held on ${heldPositionalDates.size} day(s).`);
   return { byPlayer, heldPositionalDates };

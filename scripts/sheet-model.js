@@ -82,7 +82,10 @@ export function buildAttendanceModel({
   const countsForTeam = (sessionId) =>
     teamEntryIds.has(sessionId) || sessionId === "unscheduled" || (!entryById.has(sessionId) && !isPositional(sessionId));
 
-  const credited = attendance.filter((r) => countsForTeam(r.sessionId));
+  // `positional` is set by the caller from the session's id AND name (see
+  // isPositionalCheckIn), because kiosk manual-picker sessions have free-text names.
+  const isPositionalRecord = (r) => r.positional === true || isPositional(r.sessionId);
+  const credited = attendance.filter((r) => !isPositionalRecord(r) && countsForTeam(r.sessionId));
 
   // ---- team practice rows ----
   let firstKey = null;
@@ -130,7 +133,7 @@ export function buildAttendanceModel({
   // playerId -> dateKey -> { first: earliest scan Date, sessions: Set(sessionId) }
   const positionalByPlayer = new Map();
   for (const r of attendance) {
-    if (!isPositional(r.sessionId)) continue;
+    if (!isPositionalRecord(r)) continue;
     if (!positionalByPlayer.has(r.playerId)) positionalByPlayer.set(r.playerId, new Map());
     const byDate = positionalByPlayer.get(r.playerId);
     const info = byDate.get(r.dateKey) || { first: r.time, sessions: new Set() };
