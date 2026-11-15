@@ -119,6 +119,14 @@ The **Team Attendance Sheets** workflow (Actions tab → Run workflow) writes on
 team: players across the top, one row per team-practice date, and Total Days / Days Attended /
 Days Missed / Miss % at the top. Enter a team code (or `ALL`) as `team_ids`.
 
+The sheet has two kinds of rows. **Team practice** rows come from the team's own schedule.
+**Positional** rows (labelled "— Positional") are the Saturday clinics: each player is *required*
+to attend the clinic for their own **position** (set it on the Roster Import tab — one by one, or
+in bulk via "Set positions in bulk"), so it shows as attended (arrival time) or ✗ missed and counts
+toward Total Days / Miss %. The summary also splits out Team Practice Miss % and Positional Miss %.
+A player with no position set, or whose position has no clinic that day, isn't charged; if they
+attend another clinic anyway it appears as "+Setter" (not counted).
+
 Robot (service) accounts have no Drive storage, so they can't create files. A small Apps Script
 helper creates each sheet in the director's own Drive; the workflow then fills it in.
 

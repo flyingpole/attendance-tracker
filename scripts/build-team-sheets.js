@@ -18,6 +18,9 @@ import {
   columnLetter,
   FIRST_DATA_ROW,
   FROZEN_ROWS,
+  SUMMARY_FIRST_ROW,
+  SUMMARY_LAST_ROW,
+  DIVIDER_ROW,
   MISS_ALERT,
   SUMMARY_HEADER_ROW,
 } from "./sheet-model.js";
@@ -114,7 +117,7 @@ async function loadTeamData(teamId, scheduleEntries, cancellations, now) {
   playersSnap.forEach((d) => {
     const data = d.data();
     if (data.active === false) return;
-    players.push({ id: d.id, name: data.name, joinedDate: data.joinedDate || null });
+    players.push({ id: d.id, name: data.name, position: data.position || "", joinedDate: data.joinedDate || null });
   });
 
   // Look scans up by player (not team) so a player who moved onto this team
@@ -312,16 +315,16 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
     // Summary block
     {
       repeatCell: {
-        range: range(2, 6, 0, width),
+        range: range(SUMMARY_FIRST_ROW - 1, SUMMARY_LAST_ROW, 0, width),
         cell: { userEnteredFormat: { backgroundColor: rgb("#eef4f1"), horizontalAlignment: "CENTER", textFormat: { bold: true } } },
         fields: "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)",
       },
     },
-    { repeatCell: { range: range(5, 6, 1, width), cell: { userEnteredFormat: { numberFormat: { type: "PERCENT", pattern: "0%" } } }, fields: "userEnteredFormat.numberFormat" } },
+    { repeatCell: { range: range(5, SUMMARY_LAST_ROW, 1, width), cell: { userEnteredFormat: { numberFormat: { type: "PERCENT", pattern: "0%" } } }, fields: "userEnteredFormat.numberFormat" } },
     // Divider row
     {
       repeatCell: {
-        range: range(6, 7, 0, width),
+        range: range(DIVIDER_ROW - 1, DIVIDER_ROW, 0, width),
         cell: { userEnteredFormat: { backgroundColor: rgb("#d5e3dc"), textFormat: { bold: true } } },
         fields: "userEnteredFormat(backgroundColor,textFormat)",
       },
@@ -350,11 +353,12 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
       textRule("TEXT_EQ", "✗", "#f4c7c3", "#9c1c12"),
       textRule("TEXT_CONTAINS", ":", "#d9ead3", "#1e5a2b"),
       textRule("TEXT_EQ", "–", "#eeeeee", "#777777"),
+      textRule("TEXT_STARTS_WITH", "+", "#dbe8f5", "#1f4e79"), // extra clinic attended, not counted
       {
         addConditionalFormatRule: {
           index: 0,
           rule: {
-            ranges: [range(5, 6, 1, width)],
+            ranges: [range(5, SUMMARY_LAST_ROW, 1, width)], // all three Miss % rows
             booleanRule: { condition: { type: "NUMBER_GREATER_THAN_EQ", values: [{ userEnteredValue: "0.25" }] }, format: { backgroundColor: rgb("#f4c7c3"), textFormat: { foregroundColor: rgb("#9c1c12") } } },
           },
         },
