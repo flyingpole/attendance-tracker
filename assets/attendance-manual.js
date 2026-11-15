@@ -8,6 +8,7 @@ import {
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getEntriesForDate, dateToKey, keyToDate } from "./schedule-matching.js";
+import { POSITIONAL_PRACTICES, SATURDAY, positionalKeyFor, positionalSessionId } from "./positional.js";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -41,6 +42,7 @@ export function initManualAttendanceTab(container) {
         <select id="maTeam"></select>
         <p style="color:var(--muted); font-size:0.85rem; margin:0.4rem 0 0 0;">
           Positional practices are open to any team — your ticks are kept when you switch teams.
+          A player who attended several positionals needs one entry per practice.
         </p>
       </div>
     </div>
@@ -110,8 +112,8 @@ export function initManualAttendanceTab(container) {
   }
 
   function entryLabel(e) {
-    const who = e.type === "team" ? teams.get(e.teamId)?.name || e.teamId : e.position;
-    return `${e.label} — ${who} (${e.startTime}–${e.endTime})`;
+    if (e.type === "position") return `${e.label} — any team`;
+    return `${e.label} — ${teams.get(e.teamId)?.name || e.teamId} (${e.startTime}–${e.endTime})`;
   }
 
   function refreshPractices() {
@@ -125,14 +127,31 @@ export function initManualAttendanceTab(container) {
       practiceSelect.innerHTML = "";
       return;
     }
-    todaysEntries = getEntriesForDate(keyToDate(dateKey), scheduleEntries, cancellations).sort((a, b) =>
-      String(a.startTime).localeCompare(String(b.startTime))
-    );
+    const scheduled = getEntriesForDate(keyToDate(dateKey), scheduleEntries, cancellations);
+    // Team practices come from the schedule. Positional practices are always the five
+    // standard ones on a Saturday (or any day one is scheduled) — players can attend
+    // any of them, and whether they were held is worked out from check-ins.
+    const teamEntries = scheduled.filter((e) => e.type === "team");
+    const positionalDay = keyToDate(dateKey).getDay() === SATURDAY || scheduled.some((e) => e.type === "position");
+    const positionalOptions = positionalDay
+      ? POSITIONAL_PRACTICES.map((practice) => {
+          const entry = scheduled.find((e) => e.type === "position" && positionalKeyFor(e.position) === practice.key);
+          return {
+            id: entry ? entry.id : positionalSessionId(practice.key), // same linking the kiosk uses
+            type: "position",
+            position: practice.name,
+            label: `${practice.name} Positional`,
+            startTime: entry?.startTime || "08:00",
+            endTime: entry?.endTime || "18:00",
+          };
+        })
+      : [];
+    todaysEntries = [...teamEntries.sort((a, b) => String(a.startTime).localeCompare(String(b.startTime))), ...positionalOptions];
     if (todaysEntries.length === 0) {
       practiceSelect.innerHTML = `<option value="">Nothing scheduled on this date</option>`;
       showStatus(
         "info",
-        "Nothing is scheduled for that date. If a practice was cancelled by mistake, restore it under \"Canceled occurrences\" on the Master Schedule tab; otherwise add the practice to the schedule first."
+        "No team practice is scheduled for that date (and it isn't a Saturday). If a practice was cancelled by mistake, restore it under \"Canceled occurrences\" on the Master Schedule tab; otherwise add the practice to the schedule first."
       );
       return;
     }

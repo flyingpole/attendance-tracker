@@ -9,11 +9,13 @@ on free hosting: **GitHub Pages** (frontend) + **Firebase Firestore** (database)
 - **`index.html`** — the kiosk page. Put this on the lobby PC, plug in the USB QR
   scanner (it types the scanned code + Enter, just like a keyboard — no drivers
   needed), and leave the page open. Players scan their badge to check in. Which
-  practice they're attending is detected **automatically** from the master
-  schedule (their team + the time of day, or their position for a mixed-team
-  positional clinic) — no one has to pick anything on the kiosk day to day.
+  team practice they're attending is detected **automatically** from the master
+  schedule (their team + the time of day). On Saturdays the kiosk also shows the five
+  **positional practices** (Setter, Outside Hitter, Middle Blocker, Right Side Hitter,
+  Libero/Defense): a player taps each one they attended, then scans, and each is logged as
+  its own check-in. Players aren't tagged with a position — anyone can attend any positional.
 - **`admin.html`** — the director's console (behind a login). Manage teams, import
-  rosters from CSV (including each player's position), set up the master
+  rosters from CSV, set up the master
   schedule, and generate printable QR badges.
 - **GitHub Actions** runs every night, reads the previous day's scans straight from
   Firestore, and emails a summary to the director (all teams) and each coach (their
@@ -120,12 +122,12 @@ team: players across the top, one row per team-practice date, and Total Days / D
 Days Missed / Miss % at the top. Enter a team code (or `ALL`) as `team_ids`.
 
 The sheet has two kinds of rows. **Team practice** rows come from the team's own schedule.
-**Positional** rows (labelled "— Positional") are the Saturday clinics: each player is *required*
-to attend the clinic for their own **position** (set it on the Roster Import tab — one by one, or
-in bulk via "Set positions in bulk"), so it shows as attended (arrival time) or ✗ missed and counts
-toward Total Days / Miss %. The summary also splits out Team Practice Miss % and Positional Miss %.
-A player with no position set, or whose position has no clinic that day, isn't charged; if they
-attend another clinic anyway it appears as "+Setter" (not counted).
+**Positional** rows (labelled "— Positional") are the Saturday clinics. Players aren't tagged with
+a position and can attend several clinics in a day, so attending **any one** positional satisfies
+the requirement (the cell shows the first arrival time, plus "+N" if they attended N more). Not
+every Saturday has clinics (tournaments, holidays), so a Saturday only gets a row when **at least
+one player on any team** checked into a positional that day; if so, everyone on the team who
+didn't attend one shows ✗. The summary splits out Team Practice Miss % and Positional Miss %.
 
 Robot (service) accounts have no Drive storage, so they can't create files. A small Apps Script
 helper creates each sheet in the director's own Drive; the workflow then fills it in.
@@ -189,9 +191,8 @@ This needs the latest `firestore.rules` published in the Firebase console.
 
 1. **Add teams** (Admin → Teams): a short team code, name, coach name, and coach email.
 2. **Import rosters** (Admin → Roster Import): download the CSV template, fill in
-   `Name` + `TeamID` (must match a team code you created) + optional `Email`/`Jersey`/`Position`,
-   upload it. Each new player gets a unique badge code automatically. You can also set or
-   fix a player's position any time from the roster table itself, without re-importing.
+   `Name` + `TeamID` (must match a team code you created) + optional `Email`/`Jersey`,
+   upload it. Each new player gets a unique badge code automatically.
 3. **Set up the master schedule** (Admin → Master Schedule): add an entry for each
    practice block. Two entry types:
    - **Recurring** — pick the day(s) of the week, a start/end time, and a **start date**
@@ -203,12 +204,13 @@ This needs the latest `firestore.rules` published in the Firebase console.
      pattern (a special clinic, a tournament day, etc.).
 
    Either kind is either a **Team Practice** (matches by the player's team) or a
-   **Positional Practice** (open to anyone who scans in during that window — players cross
-   over between positional clinics all the time, so it's not restricted by a player's own
-   tagged position; the position you pick is just a label). A scan counts starting 15
-   minutes before the listed start time, and if more than one entry is active at once (e.g.
-   team practice overlapping a positional clinic), one scan checks the player into all of
-   them. This is what the kiosk uses to figure out what to record.
+   **Positional Practice**. Team practices are what the kiosk matches automatically: a scan
+   counts starting 15 minutes before the listed start time. Positional practices are chosen
+   by the player on the kiosk (Saturdays, or any day a positional is scheduled) rather than
+   matched by time, and whether they were held that day is worked out from whether anyone
+   checked in — so tournaments and holidays need no schedule changes. Existing positional
+   entries are still used to link check-ins to the calendar ("Opposite" is treated as Right
+   Side Hitter and "Libero" as Libero/Defense).
 
    The Week/Month calendar views on this tab show the schedule as it actually applies to
    real dates (respecting each entry's date range). Click any event on the calendar for

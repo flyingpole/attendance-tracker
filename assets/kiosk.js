@@ -8,6 +8,7 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getEntriesForDate } from "./schedule-matching.js";
+import { POSITIONAL_PRACTICES, SATURDAY, positionalKeyFor, positionalSessionId } from "./positional.js";
 
 const scanInput = document.getElementById("scanInput");
 const flash = document.getElementById("flash");
@@ -17,6 +18,9 @@ const manualToggleBtn = document.getElementById("manualToggleBtn");
 const backToAutoBtn = document.getElementById("backToAutoBtn");
 const autoModeStatus = document.getElementById("autoModeStatus");
 const manualPickerWrap = document.getElementById("manualPickerWrap");
+const positionalPanel = document.getElementById("positionalPanel");
+const positionalPicker = document.getElementById("positionalPicker");
+const positionalHint = document.getElementById("positionalHint");
 
 let teamsById = new Map();
 let playersByBadge = new Map();
@@ -25,6 +29,8 @@ let scheduleCancellations = [];
 let processing = false;
 let selectedSession = null; // { id, label } — used only in manual mode
 let manualMode = false;
+const selectedPositionals = new Set(); // keys from POSITIONAL_PRACTICES the next scan will log into
+let selectionTimer = null;
 
 function setFlash(message, kind) {
   flash.textContent = message;
@@ -48,6 +54,7 @@ function focusInput() {
 
 manualToggleBtn.addEventListener("click", () => {
   manualMode = true;
+  renderPositionalPanel();
   autoModeStatus.classList.add("hidden");
   manualPickerWrap.classList.remove("hidden");
   focusInput();
@@ -55,6 +62,7 @@ manualToggleBtn.addEventListener("click", () => {
 
 backToAutoBtn.addEventListener("click", () => {
   manualMode = false;
+  renderPositionalPanel();
   autoModeStatus.classList.remove("hidden");
   manualPickerWrap.classList.add("hidden");
   focusInput();
@@ -122,11 +130,13 @@ function applySessions(snap) {
 function applySchedule(snap) {
   scheduleEntries = [];
   snap.forEach((doc) => scheduleEntries.push({ id: doc.id, ...doc.data() }));
+  renderPositionalPanel();
 }
 
 function applyCancellations(snap) {
   scheduleCancellations = [];
   snap.forEach((doc) => scheduleCancellations.push(doc.data()));
+  renderPositionalPanel();
 }
 
 function applyTeams(snap) {
@@ -158,35 +168,88 @@ function isTimeActiveOrUpcoming(entry, nowMinutes) {
   return nowMinutes >= start && nowMinutes < end;
 }
 
-// A player's tagged position is NOT used to gate which positional practices
-// they can check into — players frequently cross over (e.g. a setter sitting
-// in on a hitting clinic), so any positional entry that's active/about to
-// start is open to whoever scans during that window; they self-select by
-// physically showing up. Team-practice entries still only match the player's
-// own team. If several entries are live at once (team practice overlapping a
-// positional clinic, or two concurrent positional clinics), one scan logs the
-// player into all of them. Falls back to a generic label if nothing matches,
-// so the scan is never lost.
+// Which practice(s) a scan belongs to:
+//  - TEAM practice: detected automatically from the master schedule (the
+//    player's own team, within the check-in window).
+//  - POSITIONAL practices: chosen on screen. Players aren't tagged with a
+//    position — any player can attend any positional, several in a day — so on
+//    positional days (Saturdays, or any day a positional is scheduled) they tap
+//    each practice they attended, then scan; each becomes its own check-in.
+//    There's no schedule or time check for positionals: whether they were held
+//    that day is worked out later from whether anyone checked in.
+// Scans with nothing to log: on a positional day the player is asked to choose
+// one first; otherwise it's recorded as an open/unscheduled check-in so the scan
+// is never lost.
 //
-// Which entries are even in play today is resolved by getEntriesForDate,
-// which also honors each recurring entry's start/end date range (so a team's
-// old Mon/Tue slot from last season doesn't still show up after they moved
-// to Wed/Thu this season) and any one-off cancellations for today specifically.
+// Which team entries are in play today is resolved by getEntriesForDate, which
+// honors each entry's start/end date range and one-off cancellations.
+function todaysEntries(now = new Date()) {
+  return getEntriesForDate(now, scheduleEntries, scheduleCancellations);
+}
+
+function isPositionalDay(now = new Date()) {
+  return now.getDay() === SATURDAY || todaysEntries(now).some((e) => e.type === "position");
+}
+
 function resolveAutoSessions(player) {
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const todaysEntries = getEntriesForDate(now, scheduleEntries, scheduleCancellations);
+  const todays = todaysEntries(now);
 
-  const matches = todaysEntries.filter((e) => {
-    if (!isTimeActiveOrUpcoming(e, nowMinutes)) return false;
-    return e.type === "team" ? e.teamId === player.teamId : true;
-  });
+  const sessions = todays
+    .filter((e) => e.type === "team" && e.teamId === player.teamId && isTimeActiveOrUpcoming(e, nowMinutes))
+    .map((e) => ({ id: e.id, label: e.label }));
 
-  if (matches.length === 0) {
-    return [{ id: "unscheduled", label: "Open/Unscheduled Check-in" }];
+  for (const practice of POSITIONAL_PRACTICES.filter((p) => selectedPositionals.has(p.key))) {
+    // Link to today's scheduled entry when there is one (keeps the calendar's
+    // "who attended" popup working); otherwise use the practice's own id.
+    const scheduled = todays.find((e) => e.type === "position" && positionalKeyFor(e.position) === practice.key);
+    // The label always uses the current name ("Right Side Hitter", "Libero/Defense"),
+    // even when the schedule entry still says "Opposite" / "Libero".
+    sessions.push({ id: scheduled ? scheduled.id : positionalSessionId(practice.key), label: `${practice.name} Positional` });
   }
-  return matches.map((e) => ({ id: e.id, label: e.label }));
+
+  if (sessions.length) return { sessions };
+  if (isPositionalDay(now)) return { sessions: [], needsPositionalChoice: true };
+  return { sessions: [{ id: "unscheduled", label: "Open/Unscheduled Check-in" }] };
 }
+
+// --- Positional picker (multi-select toggles) ---
+function clearPositionalSelection() {
+  selectedPositionals.clear();
+  clearTimeout(selectionTimer);
+  renderPositionalPanel();
+}
+
+function renderPositionalPanel() {
+  const show = !manualMode && isPositionalDay();
+  positionalPanel.classList.toggle("hidden", !show);
+  if (!show) {
+    selectedPositionals.clear();
+    return;
+  }
+  positionalPicker.innerHTML = "";
+  for (const practice of POSITIONAL_PRACTICES) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = practice.name;
+    btn.className = selectedPositionals.has(practice.key) ? "session-btn active" : "session-btn";
+    btn.addEventListener("click", () => {
+      if (selectedPositionals.has(practice.key)) selectedPositionals.delete(practice.key);
+      else selectedPositionals.add(practice.key);
+      // Don't leave one player's choices sitting there for the next person.
+      clearTimeout(selectionTimer);
+      if (selectedPositionals.size) selectionTimer = setTimeout(clearPositionalSelection, 60 * 1000);
+      renderPositionalPanel();
+      focusInput();
+    });
+    positionalPicker.appendChild(btn);
+  }
+  const names = POSITIONAL_PRACTICES.filter((p) => selectedPositionals.has(p.key)).map((p) => p.name);
+  positionalHint.textContent = names.length ? `Selected: ${names.join(" + ")} — now scan your badge.` : "";
+}
+// Picks up midnight rollover (a Friday kiosk becoming a Saturday one) without a reload.
+setInterval(renderPositionalPanel, 60 * 1000);
 
 async function handleScan(code) {
   if (processing) return;
@@ -210,7 +273,18 @@ async function handleScan(code) {
   }
 
   const team = teamsById.get(player.teamId);
-  const sessionInfos = manualMode ? [selectedSession] : resolveAutoSessions(player);
+  let sessionInfos;
+  if (manualMode) {
+    sessionInfos = [selectedSession];
+  } else {
+    const resolved = resolveAutoSessions(player);
+    if (resolved.needsPositionalChoice) {
+      setFlash(`Hi ${player.name} — tap the positional practice(s) you're attending above, then scan again.`, "error");
+      processing = false;
+      return;
+    }
+    sessionInfos = resolved.sessions;
+  }
 
   try {
     for (const sessionInfo of sessionInfos) {
@@ -225,6 +299,7 @@ async function handleScan(code) {
     }
     const labels = sessionInfos.map((s) => s.label).join(" + ");
     setFlash(`Welcome, ${player.name} — ${team ? team.name : player.teamId} (${labels})`, "ok");
+    clearPositionalSelection();
   } catch (err) {
     console.error(err);
     setFlash("Error saving check-in. Try scanning again.", "error");

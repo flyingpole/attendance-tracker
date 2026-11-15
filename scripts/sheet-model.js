@@ -2,6 +2,7 @@
 // dates count as team practices, who was present, and lays out the cell grid.
 // Kept separate from build-team-sheets.js so it can be tested on its own.
 import { getEntriesForDate, dateToKey, keyToDate } from "../assets/schedule-matching.js";
+import { isPositionalSessionId } from "../assets/positional.js";
 
 export const MISSED = "✗";
 export const NOT_YET = "–";
@@ -46,26 +47,28 @@ function lastNameSortKey(name) {
   return `${parts[parts.length - 1]} ${parts.join(" ")}`.toLowerCase();
 }
 
-// players: [{id, name, position?, joinedDate?}] for the team.
+// players: [{id, name, joinedDate?}] for the team.
 // attendance: [{playerId, sessionId, dateKey, time: Date}] for those players.
+// heldPositionalDates: Set of dateKeys on which ANY player (any team) checked
+// into any positional practice — that is how we know the clinics were held that
+// day (tournaments and holidays have none), so it must come from all players.
 //
 // Two kinds of rows, newest first:
 //  - TEAM practice dates (the team's own schedule). A player is "present" if they
 //    scanned that local date into this team's practice, an unscheduled check-in,
-//    or a manual session. Scans into positional clinics or another team's
-//    practice don't count, so someone who only came to Saturday's clinic isn't
-//    credited for Monday.
-//  - POSITIONAL dates (Saturday clinics etc.). Each player is required to attend
-//    the clinic for their own position (player.position). They're "present" if
-//    they scanned into it, otherwise "missed". A player with no position set, or
-//    whose position has no clinic that day, isn't counted; if they attended some
-//    other clinic anyway it shows as an "extra" note and isn't counted either.
+//    or a manual session. Positional check-ins and other teams' practices don't
+//    count, so someone who only came to Saturday's clinic isn't credited for Monday.
+//  - POSITIONAL dates: each date the clinics were held. Players aren't tagged with
+//    a position — any player may attend any clinic, several in a day — and
+//    attending at least ONE satisfies the requirement: present (with the first
+//    arrival time, plus a count of any others) or missed.
 export function buildAttendanceModel({
   teamId,
   players,
   scheduleEntries,
   cancellations,
   attendance,
+  heldPositionalDates = new Set(),
   todayKey,
   nowMinutes,
   maxDays = 800,
@@ -75,8 +78,9 @@ export function buildAttendanceModel({
   const positionalIds = new Set(positionalEntries.map((e) => e.id));
   const entryById = new Map(scheduleEntries.map((e) => [e.id, e]));
   const teamEntryIds = new Set(teamEntries.map((e) => e.id));
+  const isPositional = (sessionId) => positionalIds.has(sessionId) || isPositionalSessionId(sessionId);
   const countsForTeam = (sessionId) =>
-    teamEntryIds.has(sessionId) || sessionId === "unscheduled" || !entryById.has(sessionId);
+    teamEntryIds.has(sessionId) || sessionId === "unscheduled" || (!entryById.has(sessionId) && !isPositional(sessionId));
 
   const credited = attendance.filter((r) => countsForTeam(r.sessionId));
 
@@ -123,49 +127,37 @@ export function buildAttendanceModel({
   }));
 
   // ---- positional clinic rows ----
-  // playerId -> dateKey -> sessionId -> earliest scan time
-  const scansBySession = new Map();
+  // playerId -> dateKey -> { first: earliest scan Date, sessions: Set(sessionId) }
+  const positionalByPlayer = new Map();
   for (const r of attendance) {
-    if (!positionalIds.has(r.sessionId)) continue;
-    if (!scansBySession.has(r.playerId)) scansBySession.set(r.playerId, new Map());
-    const byDate = scansBySession.get(r.playerId);
-    if (!byDate.has(r.dateKey)) byDate.set(r.dateKey, new Map());
-    const bySession = byDate.get(r.dateKey);
-    const prev = bySession.get(r.sessionId);
-    if (!prev || r.time < prev) bySession.set(r.sessionId, r.time);
-  }
-
-  let firstPositionalKey = null;
-  for (const e of positionalEntries) {
-    const k = e.kind === "single" ? e.date : e.startDate;
-    if (k && (!firstPositionalKey || k < firstPositionalKey)) firstPositionalKey = k;
+    if (!isPositional(r.sessionId)) continue;
+    if (!positionalByPlayer.has(r.playerId)) positionalByPlayer.set(r.playerId, new Map());
+    const byDate = positionalByPlayer.get(r.playerId);
+    const info = byDate.get(r.dateKey) || { first: r.time, sessions: new Set() };
+    if (r.time < info.first) info.first = r.time;
+    info.sessions.add(r.sessionId);
+    byDate.set(r.dateKey, info);
   }
 
   const positionalRows = [];
-  if (firstPositionalKey) {
-    let key = firstPositionalKey;
-    for (let i = 0; i < maxDays && key <= todayKey; i++, key = addDays(key, 1)) {
-      const live = getEntriesForDate(keyToDate(key), positionalEntries, cancellations);
-      if (!live.length) continue;
-      if (key === todayKey && nowMinutes < Math.max(...live.map((e) => toMinutes(e.endTime)))) continue;
-
-      const cells = sortedPlayers.map((p) => {
-        if (p.joinedDate && key < p.joinedDate) return { kind: "na" };
-        const scans = scansBySession.get(p.id)?.get(key);
-        const required = p.position ? live.filter((e) => e.position === p.position) : [];
-        if (required.length) {
-          const times = required.map((e) => scans?.get(e.id)).filter(Boolean);
-          return times.length ? { kind: "present", time: times.reduce((a, b) => (a < b ? a : b)) } : { kind: "missed" };
-        }
-        // Not required to attend a clinic today (no position set, or none for
-        // their position): note any clinic they came to anyway, uncounted.
-        const attended = live.filter((e) => scans && scans.has(e.id)).sort((a, b) => scans.get(a.id) - scans.get(b.id));
-        return attended.length ? { kind: "extra", label: attended[0].position } : { kind: "na" };
-      });
-      // A clinic date nobody on this team has anything to show for is just clutter.
-      if (cells.every((c) => c.kind === "na")) continue;
-      positionalRows.push({ dateKey: key, kind: "positional", cells });
+  for (const dateKey of [...heldPositionalDates].sort()) {
+    if (dateKey > todayKey) continue;
+    if (dateKey === todayKey) {
+      // Not "missed" while the clinics may still be going on: wait until the last
+      // scheduled one ends (or 6 PM if none are on the schedule).
+      const live = getEntriesForDate(keyToDate(dateKey), positionalEntries, cancellations);
+      const endsAt = live.length ? Math.max(...live.map((e) => toMinutes(e.endTime))) : 18 * 60;
+      if (nowMinutes < endsAt) continue;
     }
+    positionalRows.push({
+      dateKey,
+      kind: "positional",
+      cells: sortedPlayers.map((p) => {
+        if (p.joinedDate && dateKey < p.joinedDate) return { kind: "na" };
+        const info = positionalByPlayer.get(p.id)?.get(dateKey);
+        return info ? { kind: "present", time: info.first, extra: info.sessions.size - 1 } : { kind: "missed" };
+      }),
+    });
   }
 
   // Newest first; on the same date the team practice sits above the clinics.
@@ -204,8 +196,8 @@ export function renderSheetValues(model, { title, updatedLabel, formatDate, form
 
   const top = [
     pad([
-      `${title} — updated ${updatedLabel}. ${MISSED} = missed, time = arrival, ${NOT_YET} = not required / not yet on team, ` +
-        `+Position = attended another position's clinic (not counted). Positional clinics count only for players with a position set.`,
+      `${title} — updated ${updatedLabel}. ${MISSED} = missed, time = arrival (+N = also attended N more positional practices), ` +
+        `${NOT_YET} = not yet on team. A positional day counts when anyone checked into any positional; attending any one satisfies it.`,
     ]),
     pad(["Player", ...model.players.map((p) => p.name)]),
     pad(["Total Days", ...perPlayer((c, r) => `=COUNTIF(${r},"${MISSED}")+COUNTIF(${r},"*:*")`)]),
@@ -230,7 +222,7 @@ export function renderSheetValues(model, { title, updatedLabel, formatDate, form
     pad([
       row.kind === "positional" ? `${formatDate(row.dateKey)} — ${POSITIONAL_LABEL}` : formatDate(row.dateKey),
       ...row.cells.map((c) =>
-        c.kind === "present" ? formatTime(c.time) : c.kind === "missed" ? MISSED : c.kind === "extra" ? `+${c.label}` : NOT_YET
+        c.kind === "present" ? formatTime(c.time) + (c.extra > 0 ? ` +${c.extra}` : "") : c.kind === "missed" ? MISSED : NOT_YET
       ),
     ])
   );

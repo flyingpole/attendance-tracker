@@ -11,6 +11,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { GoogleAuth } from "google-auth-library";
 import { appendFileSync } from "node:fs";
 import { resolveMx } from "node:dns/promises";
+import { isPositionalSessionId } from "../assets/positional.js";
 import {
   buildAttendanceModel,
   renderSheetValues,
@@ -107,7 +108,28 @@ function localMinutes(date) {
 }
 
 // ---------- Firestore ----------
-async function loadTeamData(teamId, scheduleEntries, cancellations, now) {
+// Every check-in, read once per run. Teams are cut from this in memory, and it is
+// also how we know which days the positional practices were held: a day counts
+// when ANY player (on any team) checked into any positional that day.
+async function loadAllAttendance(scheduleEntries) {
+  const positionalEntryIds = new Set(scheduleEntries.filter((e) => e.type === "position").map((e) => e.id));
+  const byPlayer = new Map(); // playerId -> [{playerId, sessionId, dateKey, time}]
+  const heldPositionalDates = new Set();
+  const snap = await db.collection("attendance").get();
+  snap.forEach((d) => {
+    const r = d.data();
+    if (!r.timestamp || !r.playerId) return;
+    const time = r.timestamp.toDate();
+    const record = { playerId: r.playerId, sessionId: r.sessionId, dateKey: localDateKey(time), time };
+    if (!byPlayer.has(r.playerId)) byPlayer.set(r.playerId, []);
+    byPlayer.get(r.playerId).push(record);
+    if (positionalEntryIds.has(r.sessionId) || isPositionalSessionId(r.sessionId)) heldPositionalDates.add(record.dateKey);
+  });
+  console.log(`Loaded ${snap.size} check-ins; positional practices were held on ${heldPositionalDates.size} day(s).`);
+  return { byPlayer, heldPositionalDates };
+}
+
+async function loadTeamData(teamId, scheduleEntries, cancellations, now, allAttendance) {
   const teamSnap = await db.collection("teams").doc(teamId).get();
   if (!teamSnap.exists) throw new Error(`Team "${teamId}" not found in Firestore.`);
   const team = { id: teamId, ...teamSnap.data() };
@@ -117,22 +139,12 @@ async function loadTeamData(teamId, scheduleEntries, cancellations, now) {
   playersSnap.forEach((d) => {
     const data = d.data();
     if (data.active === false) return;
-    players.push({ id: d.id, name: data.name, position: data.position || "", joinedDate: data.joinedDate || null });
+    players.push({ id: d.id, name: data.name, joinedDate: data.joinedDate || null });
   });
 
-  // Look scans up by player (not team) so a player who moved onto this team
-  // keeps credit for practices they attended before the move.
-  const attendance = [];
-  for (let i = 0; i < players.length; i += 30) {
-    const ids = players.slice(i, i + 30).map((p) => p.id);
-    const snap = await db.collection("attendance").where("playerId", "in", ids).get();
-    snap.forEach((d) => {
-      const r = d.data();
-      if (!r.timestamp) return;
-      const time = r.timestamp.toDate();
-      attendance.push({ playerId: r.playerId, sessionId: r.sessionId, dateKey: localDateKey(time), time });
-    });
-  }
+  // Looked up by player (not team) so a player who moved onto this team keeps
+  // credit for practices they attended before the move.
+  const attendance = players.flatMap((p) => allAttendance.byPlayer.get(p.id) || []);
 
   const model = buildAttendanceModel({
     teamId,
@@ -140,6 +152,7 @@ async function loadTeamData(teamId, scheduleEntries, cancellations, now) {
     scheduleEntries,
     cancellations,
     attendance,
+    heldPositionalDates: allAttendance.heldPositionalDates,
     todayKey: localDateKey(now),
     nowMinutes: localMinutes(now),
   });
@@ -353,7 +366,6 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
       textRule("TEXT_EQ", "✗", "#f4c7c3", "#9c1c12"),
       textRule("TEXT_CONTAINS", ":", "#d9ead3", "#1e5a2b"),
       textRule("TEXT_EQ", "–", "#eeeeee", "#777777"),
-      textRule("TEXT_STARTS_WITH", "+", "#dbe8f5", "#1f4e79"), // extra clinic attended, not counted
       {
         addConditionalFormatRule: {
           index: 0,
@@ -629,6 +641,7 @@ async function main() {
   const [scheduleSnap, cancelSnap] = await Promise.all([db.collection("schedule").get(), db.collection("scheduleCancellations").get()]);
   const scheduleEntries = scheduleSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   const cancellations = cancelSnap.docs.map((d) => d.data());
+  const allAttendance = await loadAllAttendance(scheduleEntries);
 
   const updatedLabel = new Intl.DateTimeFormat("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }).format(now);
   const summaryLines = [];
@@ -643,7 +656,7 @@ async function main() {
     if (index > 0) await sleep(3000); // ~3 writes per team: stay under the Sheets API per-minute write limit
     try {
       console.log(`Team ${teamId}`);
-      const { team, model } = await loadTeamData(teamId, scheduleEntries, cancellations, now);
+      const { team, model } = await loadTeamData(teamId, scheduleEntries, cancellations, now, allAttendance);
       if (doAll && model.players.length === 0) {
         console.log("  no players on this team — skipped");
         summaryLines.push(`- **${team.name}** (${teamId}): skipped, no players`);

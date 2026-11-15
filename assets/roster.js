@@ -8,8 +8,7 @@ import {
   writeBatch,
   updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { POSITIONS } from "./positions.js";
-import { classifyRows, classifyPositionUpdates, describeNothingToImport, rosterKey } from "./roster-parse.js";
+import { classifyRows, describeNothingToImport, rosterKey } from "./roster-parse.js";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -31,7 +30,7 @@ function genBadgeCode(existingCodes) {
 // file passes through the importer end to end, but it's flagged EXAMPLE and
 // never actually imported.
 function downloadTemplate(sampleTeamCode) {
-  const csv = `Name,TeamID,Email,Jersey,Position\nEXAMPLE - delete this row,${sampleTeamCode},jane@example.com,7,${POSITIONS[0]}\n`;
+  const csv = `Name,TeamID,Email,Jersey\nEXAMPLE - delete this row,${sampleTeamCode},jane@example.com,7\n`;
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -48,8 +47,7 @@ export function initRosterTab(container) {
       <p style="color:var(--muted); margin-top:-0.5rem;">
         Columns: <strong>Name</strong> and <strong>TeamID</strong> (a team code from the list below —
         capitalization doesn't matter, and the team's full name works too), plus optional
-        <strong>Email</strong>, <strong>Jersey</strong>, and <strong>Position</strong>
-        (one of: ${POSITIONS.join(", ")}). Header names are flexible — "Team ID", "Team" and
+        <strong>Email</strong> and <strong>Jersey</strong>. Header names are flexible — "Team ID", "Team" and
         "Player Name" all work. Players already on the roster (same name + team) are skipped,
         and the template's EXAMPLE row is never imported.
       </p>
@@ -61,7 +59,7 @@ export function initRosterTab(container) {
       <div id="rosterStatus" style="margin-top:1rem;"></div>
       <div id="previewWrap" class="hidden">
         <table>
-          <thead><tr><th>Name</th><th>Team</th><th>Email</th><th>Jersey</th><th>Position</th><th>Status</th></tr></thead>
+          <thead><tr><th>Name</th><th>Team</th><th>Email</th><th>Jersey</th><th>Status</th></tr></thead>
           <tbody id="previewBody"></tbody>
         </table>
         <button id="importBtn" style="margin-top:1rem;">Import these players</button>
@@ -83,46 +81,17 @@ export function initRosterTab(container) {
       <input id="newPlayerEmail" type="email" />
       <label for="newPlayerJersey" style="margin-top:0.75rem;">Jersey (optional)</label>
       <input id="newPlayerJersey" type="text" />
-      <label for="newPlayerPosition" style="margin-top:0.75rem;">Position (optional)</label>
-      <select id="newPlayerPosition">
-        <option value="">-- none --</option>
-        ${POSITIONS.map((pos) => `<option value="${pos}">${pos}</option>`).join("")}
-      </select>
       <button id="addPlayerBtn" style="margin-top:1rem;">Add player</button>
-    </div>
-
-    <div class="card">
-      <h2 style="margin-top:0;">Set positions in bulk</h2>
-      <p style="color:var(--muted); margin-top:-0.5rem;">
-        Each player's position decides which Saturday positional clinic they're required to attend
-        on the attendance sheets, so every player needs one. Download the roster, fill in the
-        <strong>Position</strong> column in Excel or Google Sheets (${POSITIONS.join(", ")} — abbreviations
-        like OH, MB, S, Opp, L, DS work), and upload it back. Only positions change; blank cells are left
-        alone, and nobody is added or removed.
-      </p>
-      <button id="posDownloadBtn" class="secondary">Download roster for editing</button>
-      <label for="posFile" style="margin-top:1rem;">Edited roster CSV</label>
-      <input id="posFile" type="file" accept=".csv" />
-      <div id="posStatus" style="margin-top:1rem;"></div>
-      <div id="posPreviewWrap" class="hidden">
-        <table>
-          <thead><tr><th>Name</th><th>Team</th><th>Position in file</th><th>Result</th></tr></thead>
-          <tbody id="posPreviewBody"></tbody>
-        </table>
-        <button id="posApplyBtn" style="margin-top:1rem;">Apply position updates</button>
-      </div>
     </div>
 
     <div class="card">
       <h2 style="margin-top:0;">Current roster</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
-        Set or fix a player's position here any time — it's used to auto-detect which
-        positional practice they're attending on the kiosk. Use the Team dropdown to
-        reassign a player, or Delete to remove one who has left the club.
+        Use the Team dropdown to reassign a player, or Delete to remove one who has left the club.
       </p>
       <div id="rosterListStatus"></div>
       <table>
-        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Position</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th></th></tr></thead>
         <tbody id="rosterTableBody"></tbody>
       </table>
     </div>
@@ -178,9 +147,6 @@ export function initRosterTab(container) {
     rosterBody.innerHTML = "";
     for (const p of players) {
       const tr = document.createElement("tr");
-      const positionOptions = [`<option value="">-- none --</option>`]
-        .concat(POSITIONS.map((pos) => `<option value="${pos}" ${p.position === pos ? "selected" : ""}>${pos}</option>`))
-        .join("");
       // Players get reassigned between teams often, so the team is an editable
       // dropdown. A player whose team no longer exists still shows its old code.
       const teamOptions = (teamNames.has(p.teamId) ? [] : [`<option value="${escapeHtml(p.teamId)}" selected>${escapeHtml(p.teamId)} (team not found)</option>`])
@@ -195,17 +161,10 @@ export function initRosterTab(container) {
         <td><select data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.teamId)}" class="team-select">${teamOptions}</select></td>
         <td><code>${escapeHtml(p.badgeCode)}</code></td>
         <td>${escapeHtml(p.email)}</td>
-        <td><select data-id="${p.id}" class="position-select">${positionOptions}</select></td>
         <td><button class="danger delete-player" data-id="${p.id}" data-name="${escapeHtml(p.name)}">Delete</button></td>
       `;
       rosterBody.appendChild(tr);
     }
-
-    rosterBody.querySelectorAll(".position-select").forEach((sel) => {
-      sel.addEventListener("change", async () => {
-        await updateDoc(doc(db, "players", sel.dataset.id), { position: sel.value });
-      });
-    });
 
     rosterBody.querySelectorAll(".team-select").forEach((sel) => {
       sel.addEventListener("change", async () => {
@@ -286,7 +245,7 @@ export function initRosterTab(container) {
         previewBody.innerHTML = "";
         for (const r of parsedRows) {
           const tr = document.createElement("tr");
-          tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.teamId || r.teamRaw)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.jersey)}</td><td>${escapeHtml(r.position)}</td><td>${escapeHtml(r.status)}</td>`;
+          tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.teamId || r.teamRaw)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.jersey)}</td><td>${escapeHtml(r.status)}</td>`;
           previewBody.appendChild(tr);
         }
         previewWrap.classList.toggle("hidden", parsedRows.length === 0);
@@ -328,7 +287,6 @@ export function initRosterTab(container) {
           teamId: row.teamId,
           email: row.email || "",
           jersey: row.jersey || "",
-          position: row.position || "",
           badgeCode: genBadgeCode(existingCodes),
           active: true,
         });
@@ -357,7 +315,6 @@ export function initRosterTab(container) {
     const nameInput = container.querySelector("#newPlayerName");
     const emailInput = container.querySelector("#newPlayerEmail");
     const jerseyInput = container.querySelector("#newPlayerJersey");
-    const positionSelect = container.querySelector("#newPlayerPosition");
     const name = nameInput.value.trim();
     const teamId = newPlayerTeam.value;
 
@@ -382,14 +339,12 @@ export function initRosterTab(container) {
         teamId,
         email: emailInput.value.trim(),
         jersey: jerseyInput.value.trim(),
-        position: positionSelect.value,
         badgeCode,
         active: true,
       });
       nameInput.value = "";
       emailInput.value = "";
       jerseyInput.value = "";
-      positionSelect.value = "";
       showListStatus(addStatusEl, "ok", `Added ${name} to ${teamId} with badge code ${badgeCode}. Print their tag from the Badges tab.`);
       refreshRosterTable();
     } catch (err) {
@@ -397,127 +352,6 @@ export function initRosterTab(container) {
       showListStatus(addStatusEl, "error", `Couldn't add ${name}: ${String(err.message).replace(/\.$/, "")}.${hint}`);
     } finally {
       addBtn.disabled = false;
-    }
-  });
-
-  // ---- Bulk position update (download roster -> edit Position column -> upload) ----
-  const posStatusEl = container.querySelector("#posStatus");
-  const posPreviewWrap = container.querySelector("#posPreviewWrap");
-  const posPreviewBody = container.querySelector("#posPreviewBody");
-  const posApplyBtn = container.querySelector("#posApplyBtn");
-  const posFileInput = container.querySelector("#posFile");
-  let posPlan = [];
-
-  function showPosStatus(kind, message) {
-    posStatusEl.innerHTML = `<div class="status-banner ${kind}">${escapeHtml(message)}</div>`;
-    posStatusEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
-
-  async function loadTeamsAndPlayers() {
-    const [teamsSnap, playersSnap] = await Promise.all([getDocs(collection(db, "teams")), getDocs(collection(db, "players"))]);
-    const teams = new Map();
-    teamsSnap.forEach((d) => teams.set(d.id, d.data()));
-    const players = [];
-    playersSnap.forEach((d) => players.push({ id: d.id, ...d.data() }));
-    return { teams, players };
-  }
-
-  container.querySelector("#posDownloadBtn").addEventListener("click", async () => {
-    try {
-      const { players } = await loadTeamsAndPlayers();
-      players.sort((a, b) => a.teamId.localeCompare(b.teamId) || a.name.localeCompare(b.name));
-      const csv = Papa.unparse(
-        players.map((p) => ({ Name: p.name, TeamID: p.teamId, Position: p.position || "", Jersey: p.jersey || "", Email: p.email || "" }))
-      );
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "roster-positions.csv";
-      a.click();
-      URL.revokeObjectURL(url);
-      showPosStatus("info", `Downloaded ${players.length} players. Fill in the Position column, save as CSV, and upload it below.`);
-    } catch (err) {
-      showPosStatus("error", `Couldn't download the roster: ${err.message}`);
-    }
-  });
-
-  posFileInput.addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    posFileInput.value = ""; // so the same file can be picked again after fixing it
-    posPlan = [];
-    posPreviewWrap.classList.add("hidden");
-    showPosStatus("info", `Reading ${file.name}…`);
-
-    let loaded;
-    try {
-      loaded = await loadTeamsAndPlayers();
-    } catch (err) {
-      return showPosStatus("error", `Couldn't reach the database: ${err.message}`);
-    }
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: "greedy",
-      error: (err) => showPosStatus("error", `Couldn't read that file: ${err.message}`),
-      complete: (results) => {
-        posPlan = classifyPositionUpdates(results.data, loaded.teams, loaded.players);
-        const updates = posPlan.filter((r) => r.willUpdate).length;
-        posPreviewBody.innerHTML = posPlan
-          .map(
-            (r) =>
-              `<tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.teamId || r.teamRaw)}</td><td>${escapeHtml(r.rawPosition)}</td><td>${escapeHtml(r.status)}</td></tr>`
-          )
-          .join("");
-        posPreviewWrap.classList.toggle("hidden", posPlan.length === 0);
-        posApplyBtn.disabled = updates === 0;
-        posApplyBtn.textContent = updates ? `Apply ${updates} position update${updates === 1 ? "" : "s"}` : "Apply position updates";
-
-        if (posPlan.length === 0) {
-          showPosStatus("error", "No rows were found in that file. It needs a header row (Name, TeamID, Position) followed by one player per row.");
-        } else if (posPlan.every((r) => r.reason === "missing")) {
-          posPreviewWrap.classList.add("hidden"); // the table would just say "missing" for every row
-          showPosStatus(
-            "error",
-            `Couldn't find the player columns. Columns found in your file: ${(results.meta.fields || []).join(", ") || "(none)"} — it needs Name, TeamID and Position columns (use "Download roster for editing" to get the right layout).`
-          );
-        } else if (updates === 0) {
-          const bad = posPlan.filter((r) => r.reason === "badPosition").length;
-          showPosStatus(
-            "error",
-            `Nothing to update — ${posPlan.length} row(s) read, none would change a position.${bad ? ` ${bad} had an unrecognized position (use: ${POSITIONS.join(", ")}).` : ""} See the Result column.`
-          );
-        } else {
-          const skipped = posPlan.length - updates;
-          showPosStatus("info", `${updates} of ${posPlan.length} row(s) will update a position${skipped ? ` (${skipped} skipped or unchanged — see Result)` : ""}. Review, then click Apply.`);
-        }
-      },
-    });
-  });
-
-  posApplyBtn.addEventListener("click", async () => {
-    const updates = posPlan.filter((r) => r.willUpdate);
-    if (updates.length === 0) return;
-    posApplyBtn.disabled = true;
-    try {
-      let batch = writeBatch(db);
-      let ops = 0;
-      for (const u of updates) {
-        batch.update(doc(db, "players", u.playerId), { position: u.newPosition });
-        if (++ops === 400) {
-          await batch.commit();
-          batch = writeBatch(db);
-          ops = 0;
-        }
-      }
-      if (ops > 0) await batch.commit();
-      posPlan = [];
-      posPreviewWrap.classList.add("hidden");
-      showPosStatus("ok", `Updated ${updates.length} player position${updates.length === 1 ? "" : "s"}. The attendance sheets use them from the next rebuild (or run one from the Reports tab).`);
-      refreshRosterTable();
-    } catch (err) {
-      const hint = err.code === "permission-denied" ? " You may have been signed out — reload this page and log in again." : "";
-      showPosStatus("error", `Couldn't save the positions: ${String(err.message).replace(/\.$/, "")}.${hint}`);
-      posApplyBtn.disabled = false;
     }
   });
 
