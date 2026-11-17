@@ -182,6 +182,16 @@ async function main() {
       console.log(`  ${p.name}: ${recs.length} player(s)`);
     }
     console.log(`  No positional chosen: ${headcount.unassigned.size}; distinct players at any positional: ${headcount.anyone.size}`);
+    // Every check-in (not just each player's first) in half-hour windows, for "who was there around 10 AM?" questions.
+    const windows = new Map();
+    for (const r of records) {
+      const mins = Number(new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(r.time).replace(":", "")) ;
+      const h = Math.floor(mins / 100), m = mins % 100;
+      const label = `${String(h).padStart(2, "0")}:${m < 30 ? "00" : "30"}`;
+      if (!windows.has(label)) windows.set(label, new Set());
+      windows.get(label).add(r.playerId || r.playerName);
+    }
+    console.log("  Players checking in per half hour (all sessions): " + [...windows.entries()].sort().map(([k, v]) => `${k}=${v.size}`).join("  "));
     for (const r of [...headcount.anyone.values()].sort((a, b) => a.time - b.time)) {
       console.log(`    ${localTimeStr(r.time)}  ${r.playerName}  [${r.sessionLabel}]  ${teams.get(r.teamId)?.name || r.teamId}`);
     }
