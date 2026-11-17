@@ -84,8 +84,12 @@ export function buildAttendanceModel({
 
   // `positional` is set by the caller from the session's id AND name (see
   // isPositionalCheckIn), because kiosk manual-picker sessions have free-text names.
-  const isPositionalRecord = (r) => r.positional === true || isPositional(r.sessionId);
-  const credited = attendance.filter((r) => !isPositionalRecord(r) && countsForTeam(r.sessionId));
+  // `saturday` also makes a record count as a positional (anyone who shows up on a
+  // Saturday is at a positional, whatever session they picked) while leaving any
+  // genuine team-practice credit intact.
+  const isPositionalSession = (r) => r.positional === true || isPositional(r.sessionId);
+  const isPositionalRecord = (r) => isPositionalSession(r) || r.saturday === true;
+  const credited = attendance.filter((r) => !isPositionalSession(r) && countsForTeam(r.sessionId));
 
   // ---- team practice rows ----
   let firstKey = null;

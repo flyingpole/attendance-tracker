@@ -95,6 +95,10 @@ const DRIVE = "https://www.googleapis.com/drive/v3/files";
 const localDateKey = (date) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(date);
 const formatTime = (date) =>
   new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }).format(date).replace(/\s/g, " ");
+const isSaturdayKey = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay() === 6;
+};
 const formatDate = (key) => {
   const [y, m, d] = key.split("-").map(Number);
   return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(
@@ -126,10 +130,13 @@ async function loadAllAttendance(scheduleEntries) {
       dateKey: localDateKey(time),
       time,
       positional: isPositionalCheckIn(r, positionalEntryIds),
+      // Anyone who checks in on a Saturday is there for a positional, whatever
+      // session they happened to pick on the kiosk.
+      saturday: isSaturdayKey(localDateKey(time)),
     };
     if (!byPlayer.has(r.playerId)) byPlayer.set(r.playerId, []);
     byPlayer.get(r.playerId).push(record);
-    if (record.positional) heldPositionalDates.add(record.dateKey);
+    if (record.positional || record.saturday) heldPositionalDates.add(record.dateKey);
   });
   console.log(`Loaded ${snap.size} check-ins; positional practices were held on ${heldPositionalDates.size} day(s).`);
   return { byPlayer, heldPositionalDates };
