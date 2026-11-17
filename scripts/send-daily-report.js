@@ -4,12 +4,15 @@
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import nodemailer from "nodemailer";
+import { POSITIONAL_PRACTICES, isPositionalCheckIn, positionalKeyForSession } from "../assets/positional.js";
 
 const TZ = process.env.REPORT_TIMEZONE || "America/New_York";
 // The director's address is normally the one saved in the admin console
 // (Teams tab -> Director email, stored in Firestore settings/director); the
 // DIRECTOR_EMAIL secret in GitHub is the fallback if none is saved there.
 let DIRECTOR_EMAIL = (process.env.DIRECTOR_EMAIL || "").trim();
+// DIRECTOR_ONLY re-sends just the director's copy (used for catch-ups).
+const DIRECTOR_ONLY = /^true$/i.test(process.env.DIRECTOR_ONLY || "");
 const FROM_NAME = process.env.FROM_NAME || "Florida Conquer Attendance";
 
 for (const required of ["FIREBASE_SERVICE_ACCOUNT", "GMAIL_USER", "GMAIL_APP_PASSWORD"]) {
@@ -60,6 +63,49 @@ function renderTeamTable(teamRecords) {
     <tr><th>Player</th><th>Session</th><th>Arrival</th></tr>
     ${rows}
   </table>`;
+}
+
+// Headcount for the positional practices on one day: how many distinct players
+// checked into each, plus Saturday check-ins that weren't under any positional.
+// Anyone checking in on a Saturday counts as being at a positional.
+function positionalHeadcount(records, targetDate, positionalEntries) {
+  const positionNameById = new Map(positionalEntries.map((e) => [e.id, e.position]));
+  const entryIds = new Set(positionalEntries.map((e) => e.id));
+  const isSaturday = new Date(`${targetDate}T12:00:00Z`).getUTCDay() === 6;
+  const byKey = new Map(POSITIONAL_PRACTICES.map((p) => [p.key, new Map()])); // key -> playerId -> record
+  const unassigned = new Map(); // players at a positional day with no specific positional named
+  const anyone = new Map();
+  for (const r of records) {
+    const positional = isPositionalCheckIn(r, entryIds);
+    if (!positional && !isSaturday) continue;
+    const who = r.playerId || r.playerName;
+    if (!anyone.has(who)) anyone.set(who, r);
+    const key = positionalKeyForSession(r, positionNameById);
+    if (key) {
+      if (!byKey.get(key).has(who)) byKey.get(key).set(who, r);
+    } else if (!unassigned.has(who)) {
+      unassigned.set(who, r);
+    }
+  }
+  return { byKey, unassigned, anyone, any: anyone.size > 0 };
+}
+
+function renderPositionalHeadcount(h) {
+  const rows = POSITIONAL_PRACTICES.map((p) => {
+    const recs = [...h.byKey.get(p.key).values()].sort((a, b) => a.time - b.time);
+    const times = recs.length ? `${localTimeStr(recs[0].time)} – ${localTimeStr(recs[recs.length - 1].time)}` : "—";
+    return `<tr><td>${escapeHtml(p.name)}</td><td style="text-align:center">${recs.length}</td><td>${times}</td></tr>`;
+  });
+  if (h.unassigned.size) {
+    rows.push(`<tr><td>No positional chosen (checked in on a Saturday)</td><td style="text-align:center">${h.unassigned.size}</td><td></td></tr>`);
+  }
+  return `<h3>Positional practices — players checked in</h3>
+  <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;">
+    <tr><th>Positional</th><th>Players</th><th>Check-in times</th></tr>
+    ${rows.join("")}
+    <tr><td><b>Distinct players at any positional</b></td><td style="text-align:center"><b>${h.anyone.size}</b></td><td></td></tr>
+  </table>
+  <p style="color:#666">A player who attended more than one positional is counted once in each, and once in the total.</p>`;
 }
 
 async function main() {
@@ -122,8 +168,28 @@ async function main() {
     day: "numeric",
   });
 
+  const scheduleSnap = await db.collection("schedule").get();
+  const positionalEntries = [];
+  scheduleSnap.forEach((d) => {
+    const e = d.data();
+    if (e.type === "position") positionalEntries.push({ id: d.id, position: e.position });
+  });
+  const headcount = positionalHeadcount(records, targetDate, positionalEntries);
+  if (headcount.any) {
+    console.log(`Positional headcount for ${targetDate}:`);
+    for (const p of POSITIONAL_PRACTICES) {
+      const recs = [...headcount.byKey.get(p.key).values()].sort((a, b) => a.time - b.time);
+      console.log(`  ${p.name}: ${recs.length} player(s)`);
+    }
+    console.log(`  No positional chosen: ${headcount.unassigned.size}; distinct players at any positional: ${headcount.anyone.size}`);
+    for (const r of [...headcount.anyone.values()].sort((a, b) => a.time - b.time)) {
+      console.log(`    ${localTimeStr(r.time)}  ${r.playerName}  [${r.sessionLabel}]  ${teams.get(r.teamId)?.name || r.teamId}`);
+    }
+  }
+
   // --- Director email: every team, every session ---
   let directorBody = `<h2>Attendance Summary — ${dateHeading}</h2>`;
+  if (headcount.any) directorBody += renderPositionalHeadcount(headcount);
   if (records.length === 0) {
     directorBody += `<p>No check-ins recorded.</p>`;
   } else {
@@ -141,7 +207,7 @@ async function main() {
 
   // --- Per-coach emails: only their team, only if they had check-ins ---
   let coachEmailsSent = 0;
-  for (const [teamId, teamRecords] of byTeam.entries()) {
+  for (const [teamId, teamRecords] of DIRECTOR_ONLY ? [] : byTeam.entries()) {
     const team = teams.get(teamId);
     if (!team?.coachEmail) {
       console.warn(`Skipping coach email for team "${teamId}" — no coachEmail on file.`);

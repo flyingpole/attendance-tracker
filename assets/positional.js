@@ -51,6 +51,27 @@ export function isPositionalCheckIn({ sessionId, sessionLabel }, scheduledPositi
   );
 }
 
+// Which of the five positional practices does a check-in belong to? Looks at the
+// session id first ("positional-<key>"), then the session's name, which may be a
+// kiosk label ("Outside Hitter Positional"), a manual-picker session ("OH Positional",
+// "DEF Positional") or a Master Schedule position. Returns a key, or null if the
+// name doesn't say (e.g. a Saturday check-in made under a team practice).
+export function positionalKeyForSession({ sessionId, sessionLabel }, positionNameBySessionId = new Map()) {
+  if (isPositionalSessionId(sessionId)) {
+    const key = String(sessionId).slice(POSITIONAL_ID_PREFIX.length);
+    if (POSITIONAL_PRACTICES.some((p) => p.key === key)) return key;
+  }
+  const scheduled = positionalKeyFor(positionNameBySessionId.get(sessionId));
+  if (scheduled) return scheduled;
+  const label = String(sessionLabel || "");
+  if (/\bsetters?\b/i.test(label)) return "setter";
+  if (/\boutside\b|\bOH\b/i.test(label)) return "outside-hitter";
+  if (/\bmiddle\b|\bMB\b/i.test(label)) return "middle-blocker";
+  if (/\bright\b|\bopposite\b|\bRS\b|\bOPP\b/i.test(label)) return "right-side-hitter";
+  if (/\blibero\b|\bdefens|\bDEF\b|\bDS\b/i.test(label)) return "libero-defense";
+  return null;
+}
+
 export function positionalKeyFor(name) {
   return ALIASES[String(name || "").trim().toLowerCase().replace(/\s+/g, " ")] || null;
 }

@@ -17,6 +17,10 @@ on:
         description: "Skip if yesterday's report has already been sent (used by the nightly trigger)."
         type: boolean
         default: false
+      director_only:
+        description: "Send only the director's email, not the coaches' (for catch-ups)."
+        type: boolean
+        default: false
       report_date:
         description: "Optional catch-up: re-send the report for this day (YYYY-MM-DD) instead of yesterday."
         default: ""
@@ -48,4 +52,5 @@ jobs:
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
           SKIP_IF_DONE: ${{ github.event_name == 'schedule' || inputs.skip_if_done }}
           REPORT_DATE: ${{ inputs.report_date }}
+          DIRECTOR_ONLY: ${{ inputs.director_only }}
           REPORT_TIMEZONE: "America/New_York"
