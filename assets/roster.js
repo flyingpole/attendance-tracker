@@ -7,11 +7,18 @@ import {
   deleteDoc,
   writeBatch,
   updateDoc,
+  deleteField,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { classifyRows, describeNothingToImport, rosterKey } from "./roster-parse.js";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Today's date on this computer, as YYYY-MM-DD (for date inputs).
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function genBadgeCode(existingCodes) {
@@ -81,6 +88,12 @@ export function initRosterTab(container) {
       <input id="newPlayerEmail" type="email" />
       <label for="newPlayerJersey" style="margin-top:0.75rem;">Jersey (optional)</label>
       <input id="newPlayerJersey" type="text" />
+      <label for="newPlayerJoined" style="margin-top:0.75rem;">Joined date</label>
+      <input id="newPlayerJoined" type="date" />
+      <p style="color:var(--muted); font-size:0.85rem; margin:0.25rem 0 0;">
+        Attendance sheets don't count practices before this date against the player. It starts as
+        today; clear it to count the whole season.
+      </p>
       <button id="addPlayerBtn" style="margin-top:1rem;">Add player</button>
     </div>
 
@@ -91,7 +104,7 @@ export function initRosterTab(container) {
       </p>
       <div id="rosterListStatus"></div>
       <table>
-        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Joined</th><th></th></tr></thead>
         <tbody id="rosterTableBody"></tbody>
       </table>
     </div>
@@ -161,6 +174,7 @@ export function initRosterTab(container) {
         <td><select data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.teamId)}" class="team-select">${teamOptions}</select></td>
         <td><code>${escapeHtml(p.badgeCode)}</code></td>
         <td>${escapeHtml(p.email)}</td>
+        <td><input type="date" class="joined-input" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.joinedDate || "")}" value="${escapeHtml(p.joinedDate || "")}" /></td>
         <td><button class="danger delete-player" data-id="${p.id}" data-name="${escapeHtml(p.name)}">Delete</button></td>
       `;
       rosterBody.appendChild(tr);
@@ -180,6 +194,27 @@ export function initRosterTab(container) {
         } catch (err) {
           sel.value = sel.dataset.current;
           showListStatus(listStatusEl, "error", `Couldn't move ${sel.dataset.name}: ${err.message}`);
+        }
+      });
+    });
+
+    // Joined date: practices before it don't count against the player on the attendance sheets.
+    rosterBody.querySelectorAll(".joined-input").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const value = /^\d{4}-\d{2}-\d{2}$/.test(input.value) ? input.value : "";
+        try {
+          await updateDoc(doc(db, "players", input.dataset.id), { joinedDate: value || deleteField() });
+          input.dataset.current = value;
+          showListStatus(
+            listStatusEl,
+            "ok",
+            value
+              ? `${input.dataset.name} counts from ${value}. Re-run the attendance sheets to update them.`
+              : `${input.dataset.name} now counts from the start of the season. Re-run the attendance sheets to update them.`
+          );
+        } catch (err) {
+          input.value = input.dataset.current;
+          showListStatus(listStatusEl, "error", `Couldn't save the joined date for ${input.dataset.name}: ${err.message}`);
         }
       });
     });
@@ -315,6 +350,7 @@ export function initRosterTab(container) {
     const nameInput = container.querySelector("#newPlayerName");
     const emailInput = container.querySelector("#newPlayerEmail");
     const jerseyInput = container.querySelector("#newPlayerJersey");
+    const joinedInput = container.querySelector("#newPlayerJoined");
     const name = nameInput.value.trim();
     const teamId = newPlayerTeam.value;
 
@@ -341,8 +377,10 @@ export function initRosterTab(container) {
         jersey: jerseyInput.value.trim(),
         badgeCode,
         active: true,
+        ...(/^\d{4}-\d{2}-\d{2}$/.test(joinedInput.value) ? { joinedDate: joinedInput.value } : {}),
       });
       nameInput.value = "";
+      joinedInput.value = todayKey();
       emailInput.value = "";
       jerseyInput.value = "";
       showListStatus(addStatusEl, "ok", `Added ${name} to ${teamId} with badge code ${badgeCode}. Print their tag from the Badges tab.`);
@@ -355,5 +393,6 @@ export function initRosterTab(container) {
     }
   });
 
+  container.querySelector("#newPlayerJoined").value = todayKey();
   refreshRosterTable();
 }

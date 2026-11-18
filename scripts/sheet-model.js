@@ -123,7 +123,10 @@ export function buildAttendanceModel({
   }
 
   const sortedPlayers = [...players].sort((a, b) => lastNameSortKey(a.name).localeCompare(lastNameSortKey(b.name)));
-  const teamRows = teamDateKeys.map((dateKey) => ({
+  // If nobody on the team checked in on a scheduled date, assume there was no
+  // practice (holiday, tournament, weather) and leave the row out.
+  const attendedDates = new Set(credited.map((r) => r.dateKey));
+  const teamRows = teamDateKeys.filter((dateKey) => attendedDates.has(dateKey)).map((dateKey) => ({
     dateKey,
     kind: "team",
     cells: sortedPlayers.map((p) => {

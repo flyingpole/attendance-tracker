@@ -246,7 +246,7 @@ export function initTeamsTab(container) {
       ? players
           .map(
             (p) =>
-              `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.position)}</td><td><code>${escapeHtml(p.badgeCode)}</code></td><td>${escapeHtml(p.jersey)}</td><td>${escapeHtml(p.email)}</td><td><select class="move-select" data-id="${p.id}" data-name="${escapeHtml(p.name)}">${moveOptions}</select></td></tr>`
+              `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.joinedDate || "")}</td><td><code>${escapeHtml(p.badgeCode)}</code></td><td>${escapeHtml(p.jersey)}</td><td>${escapeHtml(p.email)}</td><td><select class="move-select" data-id="${p.id}" data-name="${escapeHtml(p.name)}">${moveOptions}</select></td></tr>`
           )
           .join("")
       : `<tr><td colspan="6" style="color:var(--muted);">No players imported for this team yet.</td></tr>`;
@@ -255,7 +255,7 @@ export function initTeamsTab(container) {
       <div style="padding:0.75rem 0.25rem;">
         <div style="margin-bottom:0.6rem;">${coachLine}</div>
         <table>
-          <thead><tr><th>Player</th><th>Position</th><th>Badge code</th><th>Jersey</th><th>Email</th><th>Reassign</th></tr></thead>
+          <thead><tr><th>Player</th><th>Joined</th><th>Badge code</th><th>Jersey</th><th>Email</th><th>Reassign</th></tr></thead>
           <tbody>${rosterRows}</tbody>
         </table>
       </div>

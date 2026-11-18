@@ -121,6 +121,11 @@ The **Team Attendance Sheets** workflow (Actions tab → Run workflow) writes on
 team: players across the top, one row per team-practice date, and Total Days / Days Attended /
 Days Missed / Miss % at the top. Enter a team code (or `ALL`) as `team_ids`.
 
+A practice date only gets a row if at least one player on the team checked in that day; if nobody
+did, it's assumed there was no practice (holiday, tournament, weather). A player's **Joined** date
+(Roster tab: set when adding a player, editable in the table) means practices before it show "–"
+and don't count against them.
+
 The sheet has two kinds of rows. **Team practice** rows come from the team's own schedule.
 **Positional** rows (labelled "— Positional") are the Saturday clinics. Players aren't tagged with
 a position and can attend several clinics in a day, so attending **any one** positional satisfies
