@@ -375,7 +375,10 @@ export function initTeamsTab(container) {
         coachNameInput.value = t.coachName || "";
         coachEmailInput.value = t.coachEmail || "";
         editingExisting = true;
-        statusEl.innerHTML = "";
+        // The form is at the top of the page, so bring it into view or the click looks like it did nothing.
+        statusEl.innerHTML = `<div class="status-banner ok">Editing team ${escapeHtml(t.id)}. Change the name or coach below, then save.</div>`;
+        (teamNameInput.closest(".card") || teamNameInput).scrollIntoView({ behavior: "smooth", block: "start" });
+        teamNameInput.focus({ preventScroll: true });
       });
     });
 

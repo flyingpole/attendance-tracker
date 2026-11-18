@@ -100,11 +100,12 @@ export function initRosterTab(container) {
     <div class="card">
       <h2 style="margin-top:0;">Current roster</h2>
       <p style="color:var(--muted); margin-top:-0.5rem;">
-        Use the Team dropdown to reassign a player, or Delete to remove one who has left the club.
+        Click a name, email, jersey or joined date to change it (it saves when you click away). Use the
+        Team dropdown to reassign a player, or Delete to remove one who has left the club.
       </p>
       <div id="rosterListStatus"></div>
       <table>
-        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Joined</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Team</th><th>Badge code</th><th>Email</th><th>Jersey</th><th>Joined</th><th></th></tr></thead>
         <tbody id="rosterTableBody"></tbody>
       </table>
     </div>
@@ -170,10 +171,11 @@ export function initRosterTab(container) {
         )
         .join("");
       tr.innerHTML = `
-        <td>${escapeHtml(p.name)}</td>
+        <td><input type="text" class="field-input" data-field="name" data-id="${p.id}" data-team="${escapeHtml(p.teamId)}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.name)}" value="${escapeHtml(p.name)}" style="min-width:11rem;" /></td>
         <td><select data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.teamId)}" class="team-select">${teamOptions}</select></td>
         <td><code>${escapeHtml(p.badgeCode)}</code></td>
-        <td>${escapeHtml(p.email)}</td>
+        <td><input type="email" class="field-input" data-field="email" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.email || "")}" value="${escapeHtml(p.email || "")}" style="min-width:12rem;" /></td>
+        <td><input type="text" class="field-input" data-field="jersey" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.jersey || "")}" value="${escapeHtml(p.jersey || "")}" style="width:4rem;" /></td>
         <td><input type="date" class="joined-input" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-current="${escapeHtml(p.joinedDate || "")}" value="${escapeHtml(p.joinedDate || "")}" /></td>
         <td><button class="danger delete-player" data-id="${p.id}" data-name="${escapeHtml(p.name)}">Delete</button></td>
       `;
@@ -190,10 +192,65 @@ export function initRosterTab(container) {
         try {
           await updateDoc(doc(db, "players", sel.dataset.id), { teamId: sel.value });
           sel.dataset.current = sel.value;
+          // Keep this row's name box and the in-memory list on the new team (for the duplicate-name check).
+          sel.closest("tr").querySelector('[data-field="name"]').dataset.team = sel.value;
+          const moved = players.find((o) => o.id === sel.dataset.id);
+          if (moved) moved.teamId = sel.value;
           showListStatus(listStatusEl, "ok", `Moved ${sel.dataset.name} to ${label}. Their badge code is unchanged; reprint their tag if you want it to show the new team.`);
         } catch (err) {
           sel.value = sel.dataset.current;
           showListStatus(listStatusEl, "error", `Couldn't move ${sel.dataset.name}: ${err.message}`);
+        }
+      });
+    });
+
+    // Name / email / jersey are edited in place and saved when the box loses focus.
+    const LABELS = { name: "name", email: "email", jersey: "jersey" };
+    rosterBody.querySelectorAll(".field-input").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const field = input.dataset.field;
+        const value = input.value.trim();
+        const revert = () => (input.value = input.dataset.current);
+        if (field === "name") {
+          if (!value) {
+            showListStatus(listStatusEl, "error", "A player needs a name.");
+            return revert();
+          }
+          const team = input.dataset.team;
+          const clash = players.some((o) => o.id !== input.dataset.id && o.teamId === team && rosterKey(o.teamId, o.name) === rosterKey(team, value));
+          if (clash) {
+            showListStatus(listStatusEl, "error", `${value} is already on that team's roster.`);
+            return revert();
+          }
+        }
+        if (field === "email" && value && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) {
+          showListStatus(listStatusEl, "error", `"${value}" doesn't look like an email address.`);
+          return revert();
+        }
+        try {
+          await updateDoc(doc(db, "players", input.dataset.id), { [field]: value });
+          const who = input.dataset.name;
+          input.value = value;
+          input.dataset.current = value;
+          if (field === "name") {
+            // Keep the other boxes in this row pointing at the new name, and the in-memory list current.
+            input.dataset.name = value;
+            const row = input.closest("tr");
+            row.querySelectorAll("[data-name]").forEach((el) => (el.dataset.name = value));
+            const mine = players.find((o) => o.id === input.dataset.id);
+            if (mine) mine.name = value;
+          }
+          showListStatus(
+            listStatusEl,
+            "ok",
+            field === "name"
+              ? `Renamed ${who} to ${value}. Re-run the attendance sheets to update them.`
+              : `Saved ${who}'s ${LABELS[field]}${value ? "" : " (cleared)"}.`
+          );
+        } catch (err) {
+          revert();
+          const hint = err.code === "permission-denied" ? " You may have been signed out. Reload this page and log in again." : "";
+          showListStatus(listStatusEl, "error", `Couldn't save ${input.dataset.name}'s ${LABELS[field]}: ${String(err.message).replace(/\.$/, "")}.${hint}`);
         }
       });
     });

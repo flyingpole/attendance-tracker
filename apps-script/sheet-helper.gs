@@ -254,3 +254,30 @@ function getFolder_() {
 function reply_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
+
+// ---- Setup checker -------------------------------------------------------------
+// Run this from the editor (function dropdown > checkSetup > Run). It asks Google
+// for the "connect to an external service" permission if it's still missing, then
+// writes a short report to the execution log. It never prints any secret values.
+function checkSetup() {
+  var props = PropertiesService.getScriptProperties();
+  Logger.log("Running as: " + Session.getEffectiveUser().getEmail());
+  Logger.log("HELPER_SECRET set: " + !!props.getProperty("HELPER_SECRET"));
+  Logger.log("GITHUB_TOKEN set: " + !!props.getProperty("GITHUB_TOKEN"));
+  Logger.log("FIREBASE_API_KEY set: " + !!props.getProperty("FIREBASE_API_KEY"));
+
+  var info = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?access_token=" + encodeURIComponent(ScriptApp.getOAuthToken()), { muteHttpExceptions: true });
+  var scopes = "";
+  try { scopes = JSON.parse(info.getContentText()).scope || ""; } catch (err) {}
+  Logger.log("External-request permission granted: " + (scopes.indexOf("script.external_request") >= 0));
+  Logger.log("Permissions on this script: " + scopes);
+
+  var token = props.getProperty("GITHUB_TOKEN");
+  if (token) {
+    var gh = UrlFetchApp.fetch("https://api.github.com/repos/" + GITHUB_REPO + "/actions/workflows", {
+      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" },
+      muteHttpExceptions: true,
+    });
+    Logger.log("GitHub token check: HTTP " + gh.getResponseCode() + (gh.getResponseCode() === 200 ? " (ok - can read this repo's workflows)" : " (the token can't reach the repo or lacks Actions access)"));
+  }
+}
