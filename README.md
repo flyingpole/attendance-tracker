@@ -149,10 +149,18 @@ silent (like unticking "Notify people" in Google's Share dialog), so use **Email
 Teams tab to send them the link. Google only allows silent sharing with Google accounts; a coach
 whose email isn't one (e.g. Yahoo) is reported as "could NOT share" in the run summary.
 
+**First practice date:** on the admin Teams tab (Season card) set the date the season's practices
+began. Check-ins before it, such as test scans, are ignored by the sheets, and nothing is deleted.
+(The workflow's `season_start` box overrides it for one run.)
+
+**Positional Counts** is a tab on the director's summary sheet (see below).
+
 **Director's summary sheet:** tick **build_master** when running the workflow. It refreshes every
 team's sheet, then builds one spreadsheet named "All Teams Attendance Summary - Florida Conquer
 <season> Season" with an **All Teams** tab (every player on one sortable/filterable table, plus a
-per-team overview) and one tab per team that mirrors that team's sheet. It's shared view-only with
+per-team overview), a **Positional Counts** tab (for each day positionals were held: how many
+different players checked into each of the five practices, how many checked in that Saturday
+without naming one, and the total at any positional, with an average row) and one tab per team that mirrors that team's sheet. It's shared view-only with
 the director's email (set on the admin Teams tab; the `DIRECTOR_EMAIL` secret is the fallback),
 silently (untick **share_with_director** to skip). The
 workflow checks that address's mail domain first and skips sharing if it looks mistyped.

@@ -11,11 +11,13 @@ import { getFirestore } from "firebase-admin/firestore";
 import { GoogleAuth } from "google-auth-library";
 import { appendFileSync } from "node:fs";
 import { resolveMx } from "node:dns/promises";
-import { isPositionalCheckIn } from "../assets/positional.js";
+import { isPositionalCheckIn, positionalKeyForSession, POSITIONAL_PRACTICES } from "../assets/positional.js";
 import {
   buildAttendanceModel,
   renderSheetValues,
   renderAllTeamsValues,
+  renderPositionalCountsValues,
+  POSITIONAL_COUNTS_HEADER_ROW,
   columnLetter,
   FIRST_DATA_ROW,
   FROZEN_ROWS,
@@ -32,6 +34,10 @@ const TAB = "Attendance";
 // edited on the admin Teams tab); the SEASON_LABEL env var overrides it.
 let SEASON = (process.env.SEASON_LABEL || "").trim();
 const DEFAULT_SEASON = "2026-2027";
+// Check-ins before this local date (YYYY-MM-DD) are ignored, e.g. test scans from
+// before the season. From settings/season.startDate (admin Teams tab); the
+// SEASON_START env var overrides it. Empty = use everything.
+let SEASON_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.SEASON_START || "").trim()) ? process.env.SEASON_START.trim() : "";
 const TEAM_IDS = (process.env.TEAM_IDS || "16T").split(",").map((s) => s.trim()).filter(Boolean);
 // BUILD_MASTER also builds the director's all-teams spreadsheet. It always
 // refreshes every team first so the master's team tabs match the team sheets.
@@ -117,13 +123,20 @@ function localMinutes(date) {
 // when ANY player (on any team) checked into any positional that day.
 async function loadAllAttendance(scheduleEntries) {
   const positionalEntryIds = new Set(scheduleEntries.filter((e) => e.type === "position").map((e) => e.id));
+  const positionNameById = new Map(scheduleEntries.filter((e) => e.type === "position").map((e) => [e.id, e.position]));
   const byPlayer = new Map(); // playerId -> [{playerId, sessionId, dateKey, time}]
   const heldPositionalDates = new Set();
+  let skippedBeforeStart = 0;
+  const dayCounts = new Map(); // dateKey -> {byKey: Map(key -> Set(playerId)), unassigned: Set, anyone: Set}
   const snap = await db.collection("attendance").get();
   snap.forEach((d) => {
     const r = d.data();
     if (!r.timestamp || !r.playerId) return;
     const time = r.timestamp.toDate();
+    if (SEASON_START && localDateKey(time) < SEASON_START) {
+      skippedBeforeStart++;
+      return;
+    }
     const record = {
       playerId: r.playerId,
       sessionId: r.sessionId,
@@ -136,10 +149,28 @@ async function loadAllAttendance(scheduleEntries) {
     };
     if (!byPlayer.has(r.playerId)) byPlayer.set(r.playerId, []);
     byPlayer.get(r.playerId).push(record);
-    if (record.positional || record.saturday) heldPositionalDates.add(record.dateKey);
+    if (record.positional || record.saturday) {
+      heldPositionalDates.add(record.dateKey);
+      // Headcount for the director's "Positional Counts" tab.
+      if (!dayCounts.has(record.dateKey)) {
+        dayCounts.set(record.dateKey, { byKey: new Map(POSITIONAL_PRACTICES.map((p) => [p.key, new Set()])), unassigned: new Set(), anyone: new Set() });
+      }
+      const day = dayCounts.get(record.dateKey);
+      day.anyone.add(r.playerId);
+      const key = positionalKeyForSession(r, positionNameById);
+      if (key) day.byKey.get(key).add(r.playerId);
+      else day.unassigned.add(r.playerId);
+    }
   });
+  const positionalDays = [...dayCounts.entries()].map(([dateKey, d]) => ({
+    dateKey,
+    counts: Object.fromEntries([...d.byKey.entries()].map(([k, set]) => [k, set.size])),
+    unassigned: d.unassigned.size,
+    total: d.anyone.size,
+  }));
+  if (SEASON_START) console.log(`Ignored ${skippedBeforeStart} check-in(s) dated before the season start (${SEASON_START}).`);
   console.log(`Loaded ${snap.size} check-ins; positional practices were held on ${heldPositionalDates.size} day(s).`);
-  return { byPlayer, heldPositionalDates };
+  return { byPlayer, heldPositionalDates, positionalDays };
 }
 
 async function loadTeamData(teamId, scheduleEntries, cancellations, now, allAttendance) {
@@ -406,13 +437,14 @@ async function writeSheet({ id, meta }, title, rendered, playerCount, tabName = 
 
 // ---------- Director's all-teams spreadsheet ----------
 const ALL_TAB = "All Teams";
+const POSITIONAL_TAB = "Positional Counts";
 
 const getMeta = (id) => google("GET", `${SHEETS}/${id}?fields=${SHEET_META_FIELDS}`);
 
 // Tab names can't contain []*?:/\ and must be unique (case-insensitively).
 function teamTabName(team, teamId, used) {
   let name = String(team.name || teamId).replace(/[\[\]*?:\\/]/g, "-").trim().slice(0, 90) || teamId;
-  if (used.has(name.toLowerCase()) || name.toLowerCase() === ALL_TAB.toLowerCase()) name = `${name} (${teamId})`;
+  if (used.has(name.toLowerCase()) || name.toLowerCase() === ALL_TAB.toLowerCase() || name.toLowerCase() === POSITIONAL_TAB.toLowerCase()) name = `${name} (${teamId})`;
   used.add(name.toLowerCase());
   return name;
 }
@@ -510,6 +542,60 @@ async function writeAllTeamsTab({ id, meta }, rendered) {
   });
 }
 
+async function writePositionalCountsTab({ id, meta }, rendered) {
+  const sheet = meta.sheets.find((s) => s.properties.title === POSITIONAL_TAB);
+  const sheetId = sheet.properties.sheetId;
+  const existingRules = (sheet.conditionalFormats || []).length;
+  const { lastRow, width } = rendered;
+  const range = (r0, r1, c0, c1) => ({ sheetId, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 });
+  await google("POST", `${SHEETS}/${id}:batchUpdate`, {
+    requests: [
+      {
+        updateSheetProperties: {
+          properties: { sheetId, gridProperties: { rowCount: Math.max(lastRow + 20, 60), columnCount: width + 2, frozenRowCount: POSITIONAL_COUNTS_HEADER_ROW + 1, frozenColumnCount: 1 } },
+          fields: "gridProperties.rowCount,gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+        },
+      },
+      { updateCells: { range: { sheetId }, fields: "userEnteredValue,userEnteredFormat" } },
+      ...Array.from({ length: existingRules }, () => ({ deleteConditionalFormatRule: { sheetId, index: 0 } })),
+      { repeatCell: { range: range(0, 1, 0, 1), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 11 } } }, fields: "userEnteredFormat.textFormat" } },
+      {
+        repeatCell: {
+          range: range(POSITIONAL_COUNTS_HEADER_ROW - 1, POSITIONAL_COUNTS_HEADER_ROW, 0, width),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: rgb("#0b3d2e"),
+              textFormat: { bold: true, foregroundColor: rgb("#ffffff") },
+              horizontalAlignment: "CENTER",
+              verticalAlignment: "MIDDLE",
+              wrapStrategy: "WRAP",
+            },
+          },
+          fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
+        },
+      },
+      // "Average per day" row
+      {
+        repeatCell: {
+          range: range(POSITIONAL_COUNTS_HEADER_ROW, POSITIONAL_COUNTS_HEADER_ROW + 1, 0, width),
+          cell: { userEnteredFormat: { backgroundColor: rgb("#eef4f1"), textFormat: { bold: true } } },
+          fields: "userEnteredFormat(backgroundColor,textFormat)",
+        },
+      },
+      { repeatCell: { range: range(POSITIONAL_COUNTS_HEADER_ROW, lastRow, 1, width), cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } }, fields: "userEnteredFormat.horizontalAlignment" } },
+      { repeatCell: { range: range(POSITIONAL_COUNTS_HEADER_ROW, lastRow, 0, 1), cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: "userEnteredFormat.textFormat" } },
+      // Last column (total) bold
+      { repeatCell: { range: range(POSITIONAL_COUNTS_HEADER_ROW, lastRow, width - 1, width), cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: "userEnteredFormat.textFormat" } },
+      { updateDimensionProperties: { range: { sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: 1 }, properties: { pixelSize: 190 }, fields: "pixelSize" } },
+      { updateDimensionProperties: { range: { sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: width }, properties: { pixelSize: 120 }, fields: "pixelSize" } },
+      { updateDimensionProperties: { range: { sheetId, dimension: "ROWS", startIndex: 1, endIndex: 2 }, properties: { pixelSize: 52 }, fields: "pixelSize" } },
+    ],
+  });
+  await google("PUT", `${SHEETS}/${id}/values/${encodeURIComponent(`${quoteTab(POSITIONAL_TAB)}!A1:${columnLetter(width - 1)}${lastRow}`)}?valueInputOption=RAW`, {
+    values: rendered.rows.map((r) => [...r, ...Array(width - r.length).fill("")]),
+  });
+}
+
 // The director's email comes from the DIRECTOR_EMAIL secret, which has been
 // mistyped before — don't send a share to an address that can't receive mail.
 async function usableDirectorEmail() {
@@ -530,7 +616,7 @@ async function usableDirectorEmail() {
   }
 }
 
-async function buildMaster(teamResults, updatedLabel) {
+async function buildMaster(teamResults, updatedLabel, positionalDays = []) {
   const title = `All Teams Attendance Summary - Florida Conquer ${SEASON} Season`;
   const directorEmail = SHARE_WITH_DIRECTOR ? await usableDirectorEmail() : "";
   const master = await ensureSpreadsheet(MASTER_KEY, title);
@@ -543,8 +629,10 @@ async function buildMaster(teamResults, updatedLabel) {
   await google("POST", `${SHEETS}/${master.id}:batchUpdate`, {
     requests: [{ updateSpreadsheetProperties: { properties: { title }, fields: "title" } }],
   });
-  const meta = await syncMasterTabs(master.id, [ALL_TAB, ...tabs.map((t) => t.tabName)]);
+  const meta = await syncMasterTabs(master.id, [ALL_TAB, POSITIONAL_TAB, ...tabs.map((t) => t.tabName)]);
   await writeAllTeamsTab({ id: master.id, meta }, renderAllTeamsValues(teamResults, { updatedLabel }));
+  await sleep(3500);
+  await writePositionalCountsTab({ id: master.id, meta }, renderPositionalCountsValues(positionalDays, { updatedLabel, formatDate }));
   for (const t of tabs) {
     await sleep(3500); // ~3 writes per tab: keeps the master under the Sheets per-minute write quota
     await writeSheet({ id: master.id, meta }, null, t.rendered, t.model.players.length, t.tabName);
@@ -645,6 +733,11 @@ async function main() {
     const seasonDoc = await db.collection("settings").doc("season").get();
     SEASON = (seasonDoc.exists && String(seasonDoc.data().label || "").trim()) || DEFAULT_SEASON;
   }
+  if (!SEASON_START) {
+    const saved = (await db.collection("settings").doc("season").get()).data() || {};
+    if (/^\d{4}-\d{2}-\d{2}$/.test(saved.startDate || "")) SEASON_START = saved.startDate;
+  }
+  if (SEASON_START) console.log(`Season start: ${SEASON_START} (earlier check-ins are ignored)`);
   console.log(`Season: ${SEASON}`);
   const directorDoc = await db.collection("settings").doc("director").get();
   const savedDirector = directorDoc.exists ? String(directorDoc.data().email || "").trim() : "";
@@ -715,7 +808,7 @@ async function main() {
     try {
       console.log("Director summary sheet");
       if (failed) console.warn(`  ${failed} team(s) failed above and are left out of the summary.`);
-      summaryLines.unshift(await buildMaster(teamResults, updatedLabel));
+      summaryLines.unshift(await buildMaster(teamResults, updatedLabel, allAttendance.positionalDays));
     } catch (err) {
       failed++;
       console.error(`Director summary sheet failed: ${err.message}`);

@@ -22,6 +22,10 @@ on:
         description: "Optional override. Leave blank to use the season set on the admin Teams tab."
         default: ""
         required: false
+      season_start:
+        description: "Optional override (YYYY-MM-DD): ignore check-ins before this date. Leave blank to use the first practice date on the admin Teams tab."
+        default: ""
+        required: false
       build_master:
         description: "Also build the director's all-teams summary sheet (refreshes every team first, ignoring team_ids)."
         type: boolean
@@ -72,6 +76,7 @@ jobs:
           SKIP_IF_DONE: ${{ github.event_name == 'schedule' || inputs.skip_if_done }}
           DIRECTOR_EMAIL: ${{ secrets.DIRECTOR_EMAIL }}
           SEASON_LABEL: ${{ inputs.season }}
+          SEASON_START: ${{ inputs.season_start }}
           SHEET_HELPER_URL: ${{ secrets.SHEET_HELPER_URL }}
           SHEET_HELPER_SECRET: ${{ secrets.SHEET_HELPER_SECRET }}
           REPORT_TIMEZONE: "America/New_York"

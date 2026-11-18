@@ -58,6 +58,12 @@ export function initTeamsTab(container) {
       <div id="seasonStatus"></div>
       <label for="seasonLabel">Season label</label>
       <input id="seasonLabel" type="text" placeholder="2026-2027" />
+      <label for="seasonStart" style="margin-top:0.75rem; display:block;">First practice date</label>
+      <input id="seasonStart" type="date" />
+      <p style="color:var(--muted); font-size:0.85rem; margin:0.25rem 0 0;">
+        Check-ins before this date (test scans, last season) are left out of the attendance
+        sheets. Nothing is deleted. Leave blank to include everything.
+      </p>
       <button id="saveSeasonBtn" style="margin-top:1rem;">Save season</button>
     </div>
 
@@ -114,6 +120,7 @@ export function initTeamsTab(container) {
   // Season label lives in Firestore (settings/season) so the nightly/sheet jobs
   // can read it; changing it here is all that's needed to start a new season.
   const seasonInput = container.querySelector("#seasonLabel");
+  const seasonStartInput = container.querySelector("#seasonStart");
   const seasonStatus = container.querySelector("#seasonStatus");
   const seasonPreview = container.querySelector("#seasonPreview");
   const updateSeasonPreview = () => (seasonPreview.textContent = seasonInput.value.trim() || "2026-2027");
@@ -123,6 +130,7 @@ export function initTeamsTab(container) {
   getDoc(doc(db, "settings", "season"))
     .then((snap) => {
       if (snap.exists() && snap.data().label) seasonInput.value = snap.data().label;
+      if (snap.exists() && snap.data().startDate) seasonStartInput.value = snap.data().startDate;
       updateSeasonPreview();
     })
     .catch((err) => console.warn("Couldn't load season setting:", err.message));
@@ -167,8 +175,9 @@ export function initTeamsTab(container) {
       return;
     }
     try {
-      await setDoc(doc(db, "settings", "season"), { label });
-      seasonStatus.innerHTML = `<div class="status-banner ok">Season saved as "${escapeHtml(label)}". Re-run Team Attendance Sheets to rename the sheets.</div>`;
+      const startDate = /^\d{4}-\d{2}-\d{2}$/.test(seasonStartInput.value) ? seasonStartInput.value : "";
+      await setDoc(doc(db, "settings", "season"), { label, startDate });
+      seasonStatus.innerHTML = `<div class="status-banner ok">Season saved as "${escapeHtml(label)}"${startDate ? `, starting ${escapeHtml(startDate)}` : ""}. Re-run Team Attendance Sheets to apply it to the sheets.</div>`;
     } catch (err) {
       const hint = err.code === "permission-denied" ? " Publish the latest firestore.rules in the Firebase console, or log in again." : "";
       seasonStatus.innerHTML = `<div class="status-banner error">Couldn't save the season: ${escapeHtml(String(err.message).replace(/\.$/, ""))}.${hint}</div>`;

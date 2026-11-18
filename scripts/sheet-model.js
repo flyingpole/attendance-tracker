@@ -2,7 +2,7 @@
 // dates count as team practices, who was present, and lays out the cell grid.
 // Kept separate from build-team-sheets.js so it can be tested on its own.
 import { getEntriesForDate, dateToKey, keyToDate } from "../assets/schedule-matching.js";
-import { isPositionalSessionId } from "../assets/positional.js";
+import { isPositionalSessionId, POSITIONAL_PRACTICES } from "../assets/positional.js";
 
 export const MISSED = "✗";
 export const NOT_YET = "–";
@@ -289,4 +289,28 @@ export function renderAllTeamsValues(teamResults, { updatedLabel }) {
   ];
   for (let i = 0; i < body; i++) rows.push([...(playerRows[i] || blank()), "", ...(teamRows[i] || blank())]);
   return { rows, playerCount: playerRows.length, teamCount: teamRows.length, lastRow: rows.length };
+}
+
+// ---------- "Positional Counts" tab (director's sheet) ----------
+// days: [{ dateKey, counts: {<practice key>: n}, unassigned: n, total: n }], any order.
+// One row per day positionals were held, newest first: how many distinct players
+// checked into each practice, how many checked in on that Saturday without naming
+// one, and how many distinct players were at any positional that day.
+export const POSITIONAL_COUNTS_HEADER_ROW = 2;
+export function renderPositionalCountsValues(days, { updatedLabel, formatDate }) {
+  const keys = POSITIONAL_PRACTICES.map((p) => p.key);
+  const header = ["Date", ...POSITIONAL_PRACTICES.map((p) => p.name), "Checked in, no positional named", "Players at any positional"];
+  const width = header.length;
+  const sorted = [...days].sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1));
+  const avg = (pick) => (sorted.length ? Math.round((sorted.reduce((sum, d) => sum + pick(d), 0) / sorted.length) * 10) / 10 : "");
+  const rows = [
+    [
+      `Positional practice attendance — updated ${updatedLabel}. Each number is the count of different players who checked in; ` +
+        `a player at two practices is counted once in each, and once in the last column. Any Saturday check-in counts as a positional.`,
+    ],
+    header,
+    [`Average per day (${sorted.length} day${sorted.length === 1 ? "" : "s"})`, ...keys.map((k) => avg((d) => d.counts[k] || 0)), avg((d) => d.unassigned), avg((d) => d.total)],
+    ...sorted.map((d) => [formatDate(d.dateKey), ...keys.map((k) => d.counts[k] || 0), d.unassigned, d.total]),
+  ];
+  return { rows, width, lastRow: rows.length };
 }
